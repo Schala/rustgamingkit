@@ -1,0 +1,16 @@
+[package]
+edition = "2021"
+name = "rgk-textures-playstation"
+description = "PlayStation graphics support for RustGamingKit"
+version = "2021.12.8"
+
+[features]
+default = ["import"]
+import = []
+export = []
+
+[dependencies]
+bitflags = "1.3.2"
+byteorder = "1.4.3"
+thiserror = "1.0.30"
+rgk_core = { package = "rgk-core", path = "../../core", features = ["io_ext"] }

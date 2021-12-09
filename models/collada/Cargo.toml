@@ -1,0 +1,15 @@
+[package]
+edition = "2021"
+name = "rgk-models-collada"
+description = "Collada support for RustGamingKit"
+version = "2021.12.9"
+
+[features]
+default = ["import"]
+import = []
+export = []
+
+[dependencies]
+ultraviolet = "0.8.1"
+xml-rs = "0.8.4"
+rgk_core = { package = "rgk-core", path = "../../core" }

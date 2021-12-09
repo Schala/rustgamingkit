@@ -1,0 +1,17 @@
+[package]
+edition = "2021"
+name = "rgk-models-chronocross"
+description = "(Partial) Chrono Cross model support for RustGamingKit"
+version = "2021.12.9"
+
+[features]
+default = ["import"]
+import = []
+export = []
+
+[dependencies]
+bitflags = "1.3.2"
+byteorder = "1.4.3"
+thiserror = "1.0.30"
+ultraviolet = "0.8.1"
+rgk_core = { package = "rgk-core", path = "../../core", features = ["io_ext"] }

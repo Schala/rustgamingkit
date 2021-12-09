@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name = "rgk-models-fspy"
+description = "fSpy support for RustGamingKit"
+version = "2021.12.9"
+
+[features]
+default = ["import"]
+import = []
+export = []
+
+[dependencies]
+base64 = "0.13.0"
+byteorder = "1.4.3"
+json = "0.12.4"
+thiserror = "1.0.30"
+ultraviolet = "0.8.1"
+rgk_core = { package = "rgk-core", path = "../../core", features = ["io_ext"] }
