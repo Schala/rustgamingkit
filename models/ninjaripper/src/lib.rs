@@ -1,16 +1,19 @@
 pub mod rip;
 
 use bitflags::bitflags;
-use std::fs;
+
+use std::{
+	fs,
+	io::Cursor
+};
 
 use ultraviolet::vec::{
 	Vec2,
 	Vec3
 };
 
-use meshio_core::{
+use rgk_core::{
 	io_ext::ReadBinExt,
-	IOError,
 	scene::{
 		Face,
 		Mesh,
@@ -88,84 +91,67 @@ impl Default for ImportCfg {
 }
 
 #[cfg(feature = "import")]
-pub fn read(filepath: &str, cfg: ImportCfg, ) -> Result<Scene, IOError> {
-	if let Ok(input) = fs::read(filepath) {
-		let model_imp = import::rip(&mut input.as_slice());
+pub fn read(filepath: &str, cfg: ImportCfg, ) -> Result<Scene, RipImportError> {
+	let mut data = Cursor::new(fs::read(filepath))?;
+	let model = RipModel::read(&mut data)?;
 
-		if let Ok(model) = model_imp {
-			let mut root = Node::new(ObjRef::Name(filepath.to_string()), None);
+	let mut root = Node::new(ObjRef::Name(filepath.to_string()), None);
 
-			let positions = model.get_attr("SV_POSITION", 1);
-			let normals = model.get_attr("NORMAL", 1);
-			let colors = model.get_attr("COLOR", 1);
+	let positions = model.get_attr("SV_POSITION", 1);
+	let normals = model.get_attr("NORMAL", 1);
+	let colors = model.get_attr("COLOR", 1);
 
-			let uvs: Vec<Option<&Attribute>> = (1..=(model.header.num_texs as usize)).into_iter()
-				.map(|i| model.get_attr("TEXCOORD", i)).collect();
+	let uvs: Vec<Option<&Attribute>> = (1..=(model.header.num_texs as usize))
+		.into_iter().map(|i| model.get_attr("TEXCOORD", i)).collect();
 
-			let mut mesh = Mesh::default();
+	let mut mesh = Mesh::default();
 
-			// Gather vertex data
-			for i in 0..(model.header.num_verts as usize) {
-				let mut vert = Vertex::new(None);
+	// Gather vertex data
+	for i in 0..(model.header.num_verts as usize) {
+		let mut vert = Vertex::new(None);
 
-				if let Some(attr) = positions {
-					let AttrData::Vertex(v) = attr.data[i];
-					vert.position = v;
-				}
-
-				if let Some(attr) = normals {
-					let AttrData::Vertex(v) = attr.data[i];
-					vert.normal = Some(Vec3::new(v[0], v[1], v[2]));
-				}
-
-				if let Some(attr) = colors {
-					let AttrData::Vertex(v) = attr.data[i];
-					vert.color = Some(v.abs());
-				}
-
-				for uv in uvs.iter() {
-					if let Some(attr) = uv {
-						let AttrData::Vertex(v) = attr.data[i];
-						vert.uvw.push(Vec3::new(v[0], v[1], v[2]));
-					}
-				}
-
-				mesh.vertices.push(vert);
-			}
-
-			// Apply X axis invert if specified
-			if cfg.flags & ImportFlag::FLIP_X != ImportFlag::empty() {
-				for v in mesh.vertices.iter_mut() {
-					v.position.x *= -1.0;
-					if let Some(ref mut n) = v.normal {
-						n.x *= 1.0;
-					}
-				}
-			}
-
-			mesh.faces = model.faces.iter().map(|face| {
-				Face::Triangle([face[0], face[1], face[2]])
-			}).collect();
-
-			root.data = NodeData::Geometry(mesh);
-
-			let scene = Scene::new(root);
-
-			return Ok(scene);
+		if let Some(attr) = positions {
+			let AttrData::Vertex(v) = attr.data[i];
+			vert.position = v;
 		}
 
-		return Err(IOError {
-			msg: "Unable to import model".to_string(),
-		});
+		if let Some(attr) = normals {
+			let AttrData::Vertex(v) = attr.data[i];
+			vert.normal = Some(Vec3::new(v[0], v[1], v[2]));
+		}
 
-		/*if let Err(e) = model_imp {
-			return Err(IOError {
-				msg: format!("{}", e),
-			});
-		}*/
-	} else {
-		Err(IOError {
-			msg: "Unable to load file".to_string(),
-		})
+		if let Some(attr) = colors {
+			let AttrData::Vertex(v) = attr.data[i];
+			vert.color = Some(v.abs());
+		}
+
+		for uv in uvs.iter() {
+			if let Some(attr) = uv {
+				let AttrData::Vertex(v) = attr.data[i];
+				vert.uvw.push(Vec3::new(v[0], v[1], v[2]));
+			}
+		}
+
+		mesh.vertices.push(vert);
 	}
+
+	// Apply X axis invert if specified
+	if cfg.flags & ImportFlag::FLIP_X != ImportFlag::empty() {
+		for v in mesh.vertices.iter_mut() {
+			v.position.x *= -1.0;
+			if let Some(ref mut n) = v.normal {
+				n.x *= 1.0;
+			}
+		}
+	}
+
+	mesh.faces = model.faces.iter().map(|face| {
+		Face::Triangle([face[0], face[1], face[2]])
+	}).collect();
+
+	root.data = NodeData::Geometry(mesh);
+
+	let scene = Scene::new(root);
+
+	return Ok(scene);
 }

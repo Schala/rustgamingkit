@@ -1,7 +1,9 @@
 use bitflags::bitflags;
 
-static MAGIC: &[u8] = b"Pmd";
-static VERSION: f32 = 1.0;
+use rgk_core::tag3;
+
+pub const MAGIC: u32 = tag3!(b"Pmd");
+pub static VERSION: f32 = 1.0;
 
 #[repr(u8)]
 pub enum BoneType {

@@ -6,49 +6,10 @@ use byteorder::{
 
 use std::io::Result;
 
-/// Recurring file header in Chrono Cross data files
-#[derive(Clone, Debug, PartialEq)]
-pub struct Header {
-	pub num_objs: u32,
-	pub offsets: Vec<u32>,
-}
-
-impl Header {
-	#[cfg(feature = "import")]
-	fn read<R>(buf: &mut R) -> Result<Header>
-	where
-		R: ReadBytesExt,
-	{
-		let nobjs = buf.read_u32::<LE>()?;
-		let mut offsets = vec![];
-		for _ in 0..(nobjs as usize) {
-			offsets.push(buf.read_u32::<LE>()?);
-		}
-
-		Ok(Header {
-			num_objs: nobjs,
-			offsets: offsets,
-		})
-	}
-
-	#[cfg(feature = "export")]
-	fn write<W>(&self, buf: &mut W) -> Result<()>
-	where
-		W: WriteBytesExt,
-	{
-		buf.write_u32::<LE>(self.num_objs)?;
-
-		for offset in self.offsets.iter() {
-			buf.write_u32::<LE>(*offset)?;
-		}
-
-		Ok(())
-	}
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct CPTArchive {
-	pub header: Header,
+	pub num_objs: u32,
+	pub offsets: Vec<u32>,
 	pub objects: Vec<Vec<u8>>,
 	pub has_eof_ptr: bool,
 }
@@ -90,7 +51,11 @@ impl CPTArchive {
 	where
 		W: WriteBytesExt,
 	{
-		self.header.write(buf)?;
+		buf.write_u32::<LE>(self.num_objs)?;
+
+		for offset in self.offsets.iter() {
+			buf.write_u32::<LE>(*offset)?;
+		}
 
 		for obj in self.objects.iter() {
 			buf.write_all(obj.as_slice())?;
@@ -104,7 +69,11 @@ impl CPTArchive {
 	where
 		R: ReadBytesExt,
 	{
-		let header = Header::read(buf)?;
+		let nobjs = buf.read_u32::<LE>()?;
+		let mut offsets = vec![];
+		for _ in 0..(nobjs as usize) {
+			offsets.push(buf.read_u32::<LE>()?);
+		}
 
 		let length = if has_eof_ptr {
 			(header.num_objs - 1) as usize
@@ -129,7 +98,8 @@ impl CPTArchive {
 		}
 
 		Ok(CPTArchive {
-			header: header,
+			num_objs: nobjs,
+			offsets: offsets,
 			objects: objs,
 			has_eof_ptr: has_eof_ptr,
 		})

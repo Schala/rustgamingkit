@@ -1,21 +1,20 @@
 use std::{
 	env,
-	fs::read
+	fs::read,
+	io::Cursor
 };
 
-use meshio_ninjaripper::rip::import::{
-	rip,
+use rgk_models_ninjaripper::rip::{
+	RipModel,
 	RipImportError
 };
 
 fn main() -> Result<(), RipImportError> {
 	let args: Vec<String> = env::args().collect();
-	let data = read(&args[1]);
-	if let Ok(input) = data {
-		if let Ok(mdl) = rip(&mut input.as_slice()) {
-			println!("{:#?}", mdl);
-		}
-	}
+	let mut data = Cursor::new(read(&args[1])?);
+	let model = RipModel::read(&mut data)?;
+
+	println!("{:#?}", model);
 
 	Ok(())
 }

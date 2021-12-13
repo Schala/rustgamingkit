@@ -3,6 +3,11 @@ use byteorder::{
 	ReadBytesExt
 };
 
+use sha1::{
+	Digest,
+	Sha1
+};
+
 use std::{
 	fmt::{
 		Display,
@@ -14,6 +19,8 @@ use std::{
 
 use thiserror::Error;
 use ultraviolet::vec::Vec4;
+
+use rgk_core::io_ext::ReadBinExt;
 
 use import::RipImportError;
 
@@ -77,6 +84,37 @@ impl Attribute {
 
 		s
 	}
+
+	#[cfg(feature = "import")]
+	fn read<R>(buf: &mut R) -> Result<Attribute, RipImportError>
+	where
+		R: ReadBytesExt + ReadBinExt,
+	{
+		let sem = buf.read_cstr()?;
+		let sem_idx = buf.read_u32::<LE>()?;
+		let offs = buf.read_u32::<LE>()?;
+		let size = buf.read_u32::<LE>()?;
+		let nitems = buf.read_u32::<LE>()?;
+		let mut fmt = vec![];
+
+		for _i in 0..(nitems as usize) {
+			fmt.push(match buf.read_u32::<LE>()? {
+				0 => AttrFormat::Float,
+				1 => AttrFormat::Unsigned,
+				_ => AttrFormat::Signed,
+			});
+		}
+
+		Ok(Attribute {
+			semantic: sem,
+			semantic_index: sem_idx,
+			offset: offs,
+			size: size,
+			num_items: nitems,
+			format: fmt,
+			data: vec![],
+		})
+	}
 }
 
 impl Display for Attribute {
@@ -97,6 +135,35 @@ pub struct Header {
 	pub num_texs: u32,
 	pub num_shaders: u32,
 	pub num_attrs: u32
+}
+
+impl Header {
+	#[cfg(feature = "import")]
+	fn read<R>(buf: &mut R) -> Result<Header, RipImportError>
+	where
+		R: ReadBytesExt,
+	{
+		let magic = buf.read_u32::<LE>()?;
+		if magic != MAGIC {
+			return Err(RipImportError::Magic(magic));
+		}
+
+		let version = buf.read_u32::<LE>()?;
+		if version != VERSION {
+			return Err(RipImportError::Version(version));
+		}
+
+		Ok(Header {
+			magic: magic,
+			version: version,
+			num_faces: buf.read_u32::<LE>()?,
+			num_verts: buf.read_u32::<LE>()?,
+			block_size: buf.read_u32::<LE>()?,
+			num_texs: buf.read_u32::<LE>()?,
+			num_shaders: buf.read_u32::<LE>()?,
+			num_attrs: buf.read_u32::<LE>()?,
+		})
+	}
 }
 
 pub type Face = [usize; 3];
@@ -134,95 +201,9 @@ impl RipModel {
 
 		None
 	}
-}
 
-#[cfg(feature = "import")]
-pub mod import {
-	use byteorder::{
-		LE,
-		ReadBytesExt
-	};
-
-	use sha1::{
-		Digest,
-		Sha1
-	};
-
-	use meshio_core::io_ext::ReadBinExt;
-	use super::*;
-
-	#[derive(Error, Debug)]
-	pub enum RipImportError {
-		#[error("I/O error")]
-		IO {
-			#[from]
-			source: io::Error,
-		},
-		#[error("Not a Ninja Ripper model file: {0}")]
-		Magic(u32),
-		#[error("Unknown/unsupported format version: {0}")]
-		Version(u32),
-		#[error("Unknown/unsupported vertex size: {0}")]
-		VertexSize(u32),
-	}
-
-	fn header<R>(buf: &mut R) -> Result<Header, RipImportError>
-	where
-		R: ReadBytesExt,
-	{
-		let magic = buf.read_u32::<LE>()?;
-		if magic != MAGIC {
-			return Err(RipImportError::Magic(magic));
-		}
-
-		let version = buf.read_u32::<LE>()?;
-		if version != VERSION {
-			return Err(RipImportError::Version(version));
-		}
-
-		Ok(Header {
-			magic: magic,
-			version: version,
-			num_faces: buf.read_u32::<LE>()?,
-			num_verts: buf.read_u32::<LE>()?,
-			block_size: buf.read_u32::<LE>()?,
-			num_texs: buf.read_u32::<LE>()?,
-			num_shaders: buf.read_u32::<LE>()?,
-			num_attrs: buf.read_u32::<LE>()?,
-		})
-	}
-
-	fn attribute<R>(buf: &mut R) -> Result<Attribute, RipImportError>
-	where
-		R: ReadBytesExt + ReadBinExt,
-	{
-		let sem = buf.read_cstr()?;
-		let sem_idx = buf.read_u32::<LE>()?;
-		let offs = buf.read_u32::<LE>()?;
-		let size = buf.read_u32::<LE>()?;
-		let nitems = buf.read_u32::<LE>()?;
-		let mut fmt = vec![];
-
-		for _i in 0..(nitems as usize) {
-			fmt.push(match buf.read_u32::<LE>()? {
-				0 => AttrFormat::Float,
-				1 => AttrFormat::Unsigned,
-				_ => AttrFormat::Signed,
-			});
-		}
-
-		Ok(Attribute {
-			semantic: sem,
-			semantic_index: sem_idx,
-			offset: offs,
-			size: size,
-			num_items: nitems,
-			format: fmt,
-			data: vec![],
-		})
-	}
-
-	pub fn rip<R>(buf: &mut R) -> Result<Model, RipImportError>
+	#[cfg(feature = "import")]
+	pub fn read<R>(buf: &mut R) -> Result<RipModel, RipImportError>
 	where
 		R: ReadBytesExt + ReadBinExt,
 	{
@@ -287,15 +268,35 @@ pub mod import {
 			faces: face_indices,
 		})
 	}
+}
 
-	#[cfg(test)]
-	mod tests {
-		use std::fs::read;
+#[cfg(feature = "import")]
+#[derive(Error, Debug)]
+pub enum RipImportError {
+	#[error("I/O error")]
+	IO {
+		#[from]
+		source: io::Error,
+	},
+	#[error("Not a Ninja Ripper model file: {0}")]
+	Magic(u32),
+	#[error("Unknown/unsupported format version: {0}")]
+	Version(u32),
+	#[error("Unknown/unsupported vertex size: {0}")]
+	VertexSize(u32),
+}
 
-		#[test]
-		fn test_rip() {
-			let data = read("test_data/Mesh_0015.rip").unwrap();
-			println!("{:#?}", super::rip(&mut data.as_slice()).unwrap());
-		}
+#[cfg(test)]
+mod tests {
+	use std::{
+		fs::read,
+		io::Cursor
+	};
+
+	#[cfg(feature = "import")]
+	#[test]
+	fn test_rip() {
+		let mut data = Cursor::new(read("test_data/Mesh_0015.rip").unwrap());
+		println!("{:#?}", super::RipModel::read(&mut data).unwrap());
 	}
 }
