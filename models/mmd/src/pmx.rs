@@ -77,6 +77,20 @@ pub enum Encoding {
 	Unknown = 255,
 }
 
+impl Encoding {
+	#[cfg(feature = "import")]
+	fn read<R>(buf: &mut R) -> Result<Encoding, MMD2ImportError>
+	where
+		R: ReadBytesExt,
+	{
+		match buf.read_u8()? {
+			0 => Ok(Encoding::UTF16LE),
+			1 => Ok(Encoding::UTF8),
+			_ => Ok(Encoding::Unknown),
+		}
+	}
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum Frame {
 	Bone(i32),
@@ -145,11 +159,7 @@ impl Header {
 			return Err(MMD2ImportError::GlobalsCount(gcount));
 		}
 
-		let enc = match buf.read_u8()? {
-			0 => Encoding::UTF16LE,
-			1 => Encoding::UTF8,
-			_ => Encoding::Unknown,
-		};
+		let enc = Encoding::read(buf)?;
 
 		Ok(Header {
 			magic: magic,

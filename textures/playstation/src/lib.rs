@@ -15,7 +15,7 @@ pub fn read_tim(filepath: &str) -> Result<Texture, TIMImportError> {
 	let input = fs::read(filepath)?;
 	let tex = PSXTexture::read(&mut input.as_slice())?;
 
-	let mut texture = Texture::new(tex.img_header.width as usize, tex.img_header.height as usize);
+	let mut texture = Texture::new((tex.img_header.width / 2) as usize, tex.img_header.height as usize);
 
 	if tex.header.flags.contains(Flags::INDEXED) {
 		if let Some(ref palette) = tex.palette {

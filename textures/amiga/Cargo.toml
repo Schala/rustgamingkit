@@ -1,8 +1,8 @@
 [package]
 edition = "2021"
-name = "rgk-textures-playstation"
-description = "PlayStation graphics support for RustGamingKit"
-version = "2021.12.8"
+name = "rgk-textures-amiga"
+description = "Amiga graphics support for RustGamingKit"
+version = "2021.12.18"
 
 [features]
 default = ["import"]

@@ -22,8 +22,6 @@ use ultraviolet::vec::Vec4;
 
 use rgk_core::io_ext::ReadBinExt;
 
-use import::RipImportError;
-
 pub const MAGIC: u32 = 0xDEADC0DE;
 pub const VERSION: u32 = 4;
 
@@ -278,7 +276,7 @@ pub enum RipImportError {
 		#[from]
 		source: io::Error,
 	},
-	#[error("Not a Ninja Ripper model file: {0}")]
+	#[error("Not a Ninja Ripper model file: {X:0}")]
 	Magic(u32),
 	#[error("Unknown/unsupported format version: {0}")]
 	Version(u32),

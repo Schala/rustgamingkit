@@ -2,7 +2,7 @@
 edition = "2021"
 name = "rgk-textures-bitmap"
 description = "Bitmap support for RustGamingKit"
-version = "2021.12.9"
+version = "2021.12.15"
 
 [features]
 default = ["import"]
@@ -11,5 +11,9 @@ export = []
 
 [dependencies]
 bitflags = "1.3.2"
+byteorder = "1.4.3"
 thiserror = "1.0.30"
-rgk_core = { package = "rgk-core", path = "../../core", features = ["io_ext"] }
+rgk_core = { package = "rgk-core", path = "../../core" }
+
+[dev-dependencies]
+rgk_textures_playstation = { package = "rgk-textures-playstation", path = "../playstation" }

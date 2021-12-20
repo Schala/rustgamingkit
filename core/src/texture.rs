@@ -33,7 +33,7 @@ impl Color {
 			((self.blue * 255.0) as u32) << 8 | (self.alpha * 255.0) as u32
 	}
 
-	/// Returns a textual hex representation in the form of `#RRGGBB`
+	/// Returns a textual hex representation in the form of `#rrggbb`
 	pub fn hex_rgb(&self) -> String {
 		let r = (self.red * 255.0) as u8;
 		let g = (self.green * 255.0) as u8;
@@ -79,6 +79,7 @@ impl Texture {
 	/// Optimise the palette, removing duplicate entries, and adjusting indices accordingly.
 	pub fn optimize(&mut self) {
 		let mut opt_pal = vec![];
+
 		let mut opt_idx = vec![0; self.width * self.height];
 
 		for c1 in self.palette.iter() {
@@ -114,6 +115,11 @@ impl Texture {
 
 		self.palette = opt_pal;
 		self.indices = opt_idx;
+	}
+
+	/// Uses the palette and indices to build a pixel array
+	pub fn pixels(&self) -> Vec<Color> {
+		self.indices.iter().map(|i| self.palette[*i]).collect()
 	}
 }
 

@@ -1,0 +1,16 @@
+[package]
+edition = "2021"
+name = "rgk-archives-squareenix"
+description = "Square-Enix archive support for RustGamingKit"
+version = "2021.12.13"
+
+[features]
+default = ["import"]
+import = []
+export = []
+
+[dependencies]
+bitvec = "0.22.3"
+byteorder = "1.4.3"
+thiserror = "1.0.30"
+rgk_core = { package = "rgk-core", path = "../../core", features = ["bit_ext"] }

@@ -1,3 +1,6 @@
+#[cfg(feature = "bit_ext")]
+pub mod bit_ext;
+
 #[cfg(feature = "io_ext")]
 pub mod io_ext;
 
@@ -16,12 +19,12 @@ macro_rules! rtag4 {
 	}
 }
 
-/// Converts a 3-byte string into a 24-bit big endian integer, stored as a 32-bit padded unsigned integer.
-/// Byte strings longer than 3 bytes are truncated.
+/// Converts a 2-byte string into a 16-bit big endian integer.
+/// Byte strings longer than 2 bytes are truncated.
 #[macro_export]
-macro_rules! tag3 {
-	($b3: literal) => {
-		u32::from_be_bytes([$b3[0], $b3[1], $b3[2], 0])
+macro_rules! tag2 {
+	($b2: literal) => {
+		u16::from_be_bytes([$b2[0], $b2[1]])
 	}
 }
 
