@@ -1,4 +1,3 @@
-pub mod opcodes;
 pub mod processor;
 
 use processor::Processor;
@@ -24,6 +23,7 @@ impl Bus {
 		};
 
 		bus.cpu = Processor::new(&mut bus);
+
 		bus
 	}
 }

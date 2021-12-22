@@ -26,6 +26,7 @@ pub const STACK_ADDR: u16 = 256;
 pub const IRQ_ADDR: u16 = 0xFFFE;
 pub const NMI_ADDR: u16 = 0xFFFA;
 pub const RESET_ADDR: u16 = 0xFFFC;
+pub static NOP: Opcode = Opcode::new(opcode_id!(b"NOP"), Processor::imp, Processor::nop, 2);
 
 bitflags! {
 	pub struct Status: u8 {
@@ -165,102 +166,285 @@ impl<'a> Processor<'a> {
 			registers: Registers::default(),
 			cache: Cache::default(),
 			opcodes: [
+				Opcode::new(opcode_id!(b"BRK"), Processor::imm, Processor::brk, 7),
+				Opcode::new(opcode_id!(b"ORA"), Processor::izx, Processor::ora, 6),
+				Opcode::new(opcode_id!(b"BRK"), Processor::imm, Processor::brk, 7),
+				NOP,
+				NOP,
+				NOP,
+				Opcode::new(opcode_id!(b"ORA"), Processor::zp0, Processor::ora, 3),
 			],
 		}
+	}
+
+	/// Gets cached absolute address
+	#[inline]
+	pub fn abs_addr(&mut self) -> u16 {
+		self.registers.abs_addr
+	}
+
+	/// Gets cached absolute address' high byte
+	#[inline]
+	pub fn abs_hi(&mut self) -> u16 {
+		self.registers.abs_addr & 0xFF00
 	}
 
 	#[inline]
 	pub fn branch(&mut self) {
 		self.cache.cycles += 1;
-		self.cache.abs_addr = self.registers.counter + self.cache.rel_addr;
+		self.set_abs(self.counter + self.rel_addr());
 
 		// need an additional cycle if different page
-		if (self.cache.abs_addr & 0xFF00) != (self.registers.counter & 0xFF00) {
+		if self.abs_hi() != (self.counter() & 0xFF00) {
 			self.cache.cycles += 1;
 		}
 
 		// jump to the address
-		self.registers.counter = self.cache.abs_addr;
+		self.set_pc(self.abs_addr());
+	}
+
+	/// Checks specified status flag
+	#[inline]
+	pub fn check(&self, flag: Status) -> bool {
+		self.registers.status.contains(flag)
 	}
 
 	pub fn clock(&mut self) {
 		if self.cache.cycles == 0 {
 			// get and increment the counter
 			self.cache.opcode = self.read(self.registers.counter);
-			self.registers.counter += 1;
+			self.incr();
 
 			// set our cycles, and see if we need any additional cycles
-			self.cache.cycles = opcodes[self.cache.opcode as usize].cycles;
-			self.cache.cycles += self.opcodes[self.cache.opcode as usize].addr_mode();
-			self.cache.cycles += self.opcodes[self.cache.opcode as usize].op();
+			self.cache.cycles = self.oc_cycles(self.oc_index());
+			self.cache.cycles += self.oc_addr_mode(self.oc_index())(&mut self);
+			self.cache.cycles += self.oc_op(self.oc_index())(&mut self);
 		}
 
 		self.cache.cycles -= 1;
 	}
 
+	/// Retrieve the program counter value
+	#[inline]
+	pub fn counter(&self) -> u8 {
+		self.registers.counter
+	}
+
 	/// Fetch data from an operation
 	pub fn fetch(&mut self) -> u8 {
 		if !self.opcodes[self.cache.opcode as usize].addr_mode == Processor::imp {
-			self.cache.data = self.read(self.cache.abs_addr);
+			self.set_data(self.read(self.abs_addr()));
 		}
 
+		self.get_data()
+	}
+
+	#[inline]
+	/// Fetch address
+	pub fn fetch_addr(&mut self) -> u16 {
+		((self.read(self.abs_addr()) as u16) << 8) | (self.read(self.abs_addr() + 1) as u16);
+	}
+
+	/// Gets the accumulator register value
+	#[inline]
+	pub fn get_a(&mut self) -> u8 {
+		self.registers.accumulator
+	}
+
+	/// Gets the currently cached data byte
+	#[inline]
+	pub fn get_data(&mut self) -> u8 {
 		self.cache.data
+	}
+
+	/// Gets the X register value
+	#[inline]
+	pub fn get_x(&mut self) -> u8 {
+		self.registers.x
+	}
+
+	/// Gets the Y register value
+	#[inline]
+	pub fn get_y(&mut self) -> u8 {
+		self.registers.y
+	}
+
+	/// Increment program counter registry by 1
+	#[inline]
+	pub fn incr(&mut self) {
+		self.registers.counter += 1;
 	}
 
 	/// Interrupts the execution state
 	#[inline]
 	pub fn interrupt(new_abs_addr: u16, new_cycles: u8) {
 		// write the counter's current value to stack
-		self.stack_write(((self.registers.counter >> 8) & 255) as u8);
-		self.stack_write((self.registers.counter & 255) as u8);
+		self.stack_write_addr(self.counter());
 
 		// write status register to stack too
-		self.registers.status.set(Status::BREAK, false);
-		self.registers.status.set(Status::UNUSED, true);
-		self.registers.status.set(Status::NO_INTERRUPTS, true);
-		self.stack_write(self.registers.status.bits());
+		self.set_flag(Status::BREAK, false);
+		self.set_flag(Status::UNUSED, true);
+		self.set_flag(Status::NO_INTERRUPTS, true);
+		self.stack_write(self.status_bits());
 
 		// get the new counter value
-		self.cache.abs_addr = new_abs_addr;
-		let lo = self.read(self.cache.abs_addr) as u16;
-		let hi = self.read(self.cache.abs_addr + 1) as u16;
-		self.registers.counter = (hi << 8) | lo;
+		self.set_abs(new_abs_addr);
+		self.set_pc(self.fetch_addr());
 
 		self.cache.cycles = new_cycles;
 	}
 
+	/// Returns the specified opcode's address mode
+	#[inline]
+	pub fn oc_addr_mode(&mut self, i: usize) -> AddressMode {
+		self.opcodes[i].addr_mode
+	}
+
+	/// Returns the specified opcode's cycle count
+	#[inline]
+	pub fn oc_cycles(&mut self, i: usize) -> u8 {
+		self.opcodes[i].cycles
+	}
+
+	/// Returns the cached opcode index
+	#[inline]
+	pub fn oc_index(&mut self) -> usize {
+		self.cache.opcode as usize
+	}
+
+	/// Returns the specified opcode's operation
+	#[inline]
+	pub fn oc_op(&mut self, i: usize) -> Operation {
+		self.opcodes[i].op
+	}
+
+	/// Reads an address from the RAM
+	#[inline]
+	pub fn read_addr(&mut self, addr: u16) -> u16 {
+		self.read(addr) | (self.read(addr) << 8)
+	}
+
+	/// Reads an address from the ROM
+	#[inline]
+	pub fn read_rom_addr(&mut self) -> u16 {
+		let lo = self.read(self.counter()) as u16;
+		self.incr();
+
+		let hi = self.read(self.counter()) as u16;
+		self.incr();
+
+		(hi << 8) | lo
+	}
+
+	/// Gets cached relative address
+	#[inline]
+	pub fn rel_addr(&mut self) -> u16 {
+		self.cache.rel_addr
+	}
+
 	/// Resets the registers and cache
 	pub fn reset(&mut self) {
-		self.registers.accumulator = 0;
-		self.registers.status = Status::default();
-		self.registers.x = 0;
-		self.registers.y = 0;
+		self.set_a(0);
+		self.set_flag(Status::default());
+		self.set_x(0);
+		self.set_y(0);
 		self.registers.stack_ptr = 254;
 
-		self.cache.abs_addr = RESET_ADDR;
-		let lo = self.read(self.cache.abs_addr) as u16;
-		let hi = self.read(self.cache.abs_addr + 1) as u16;
-		self.registers.counter = (hi << 8) | lo;
+		self.set_abs(RESET_ADDR);
+		self.set_pc(self.fetch_addr());
 
 		self.cache.rel_addr = 0;
-		self.cache.abs_addr = 0;
-		self.cache.data = 0;
+		self.set_abs(0);
+		self.set_data(0);
 
 		self.cache.cycles = 8;
+	}
+
+	/// Sets accumulator register value
+	#[inline]
+	pub fn set_a(&mut self, value: u8) {
+		self.registers.accumulator = value;
+	}
+
+	/// Sets cached absolute address
+	#[inline]
+	pub fn set_abs(&mut self, value: u16) {
+		self.cache.abs_addr = value;
+	}
+
+	/// Sets cached data
+	#[inline]
+	pub fn set_data(&mut self, value: u8) {
+		self.cache.data = value;
+	}
+
+	/// Sets program counter register value
+	#[inline]
+	pub fn set_pc(&mut self, value: u16) {
+		self.registers.counter = value;
+	}
+
+	/// Sets status register flag
+	#[inline]
+	pub fn set_flag(&mut self, flags: Status, condition: bool) {
+		self.registers.status.set(flags, condition);
+	}
+
+	/// Sets X register value
+	#[inline]
+	pub fn set_x(&mut self, value: u8) {
+		self.registers.x = value;
+	}
+
+	/// Sets Y register value
+	#[inline]
+	pub fn set_y(&mut self, value: u8) {
+		self.registers.y = value;
+	}
+
+	/// Gets the stack pointer value
+	#[inline]
+	pub fn stack_ptr(&mut self) -> u16 {
+		self.registers.stack_ptr
 	}
 
 	/// Convenience function to read from stack
 	#[inline]
 	pub fn stack_read(&mut self) {
 		self.registers.stack_ptr += 1;
-		self.read(STACK_ADDR + self.registers.stack_ptr);
+		self.read(STACK_ADDR + self.stack_ptr());
+	}
+
+	/// Reads an address from stack
+	#[inline]
+	pub fn stack_read_addr(&mut self) -> u16 {
+		(self.stack_read() as u16) | (self.stack_read() as u16) << 8
 	}
 
 	/// Convenience function to write to stack
 	#[inline]
 	pub fn stack_write(&mut self, data: u8) {
-		self.write(STACK_ADDR + self.registers.stack_ptr, data);
+		self.write(STACK_ADDR + self.stack_ptr(), data);
 		self.registers.stack_ptr -= 1;
+	}
+
+	/// Writes an address to stack
+	#[inline]
+	pub fn stack_write_addr(&mut self, addr: u16) {
+		self.stack_write(((addr >> 8) & 255) as u8);
+		self.stack_write((addr & 255) as u8);
+	}
+
+	/// Retrieve the registry status flags
+	#[inline]
+	pub fn status(&self) -> Status {
+		self.registers.status
+	}
+
+	/// Retrieve the registry status flag bits
+	#[inline]
+	pub fn status_bits(&self) -> u8 {
+		self.registers.status.bits()
 	}
 
 	include!("operations.rs")
