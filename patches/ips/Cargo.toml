@@ -2,14 +2,14 @@
 edition = "2021"
 name = "rgk-patches-ips"
 description = "IPS patch support for RustGamingKit"
-version = "2021.12.18"
+version = "2021.12.20"
 
 [features]
 default = ["import"]
-import = []
+import = ["thiserror"]
 export = []
 
 [dependencies]
 byteorder = "1.4.3"
-thiserror = "1.0.30"
+thiserror = { version = "1.0.30", optional = true }
 rgk_core = { package = "rgk-core", path = "../../core" }

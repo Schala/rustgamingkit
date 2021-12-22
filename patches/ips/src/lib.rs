@@ -26,7 +26,6 @@ use rgk_core::tag4;
 
 pub const MAGIC: [u8; 5] = [b'P', b'A', b'T', b'C', b'H'];
 pub const EOF_MARKER: u32 = tag4!(b"\x00EOF");
-pub const MAX_OFFSET: u32 = 16842750; // ~16 MB
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecData {
@@ -163,7 +162,7 @@ impl IPSPatch {
 									});
 
 									rep_count = 0;
-									cache.push((*offs, *b)); // re-push since 'b' will have differentiated
+									cache.push((*offs, *b)); // push the new byte
 								} else {
 									cache.push((*offs, *b)); // just another byte
 								}
@@ -232,10 +231,6 @@ impl IPSPatch {
 		let mut recs = vec![];
 
 		while let Ok(offset) = buf.read_u24::<BE>() {
-			if offset > MAX_OFFSET {
-				return Err(IPSImportError::Offset(offset));
-			}
-
 			if offset != EOF_MARKER {
 				recs.push(Record::read(offset, buf)?);
 			}
@@ -272,8 +267,6 @@ pub enum IPSImportError {
 	},
 	#[error("Not an IPS Patch")]
 	Magic([u8; 5]),
-	#[error("Max offset exceeded: {0} bytes > 16842750 bytes")]
-	Offset(u32),
 }
 
 #[cfg(feature = "export")]

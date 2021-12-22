@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
-name = "rgk-textures-amiga"
-description = "Amiga graphics support for RustGamingKit"
+name = "rgk-patches-beat"
+description = "Beat patch support for RustGamingKit"
 version = "2021.12.20"
 
 [features]
@@ -10,7 +10,7 @@ import = ["thiserror"]
 export = []
 
 [dependencies]
-bitflags = "1.3.2"
 byteorder = "1.4.3"
+crc32fast = "1.3.0"
 thiserror = { version = "1.0.30", optional = true }
 rgk_core = { package = "rgk-core", path = "../../core" }
