@@ -14,141 +14,53 @@ use crate::{
 	Device
 };
 
+/// Offset of program stack
 pub const STACK_ADDR: u16 = 256;
-pub const OPCODE_TABLE_SIZE: usize = 256;
-pub const IRQ_ADDR: u16 = 0xFFFE;
-pub const NMI_ADDR: u16 = 0xFFFA;
-pub const RESET_ADDR: u16 = 0xFFFC;
 
-pub const CYCLES: [u8; OPCODE_TABLE_SIZE] = [
-	7, 6, 2, 2, 2, 3, 5, 2, 3, 2, 2, 2, 2, 4, 6, 2,
-	2, 5, 2, 2, 2, 4, 6, 2, 2, 4, 2, 2, 2, 4, 7, 2,
-	6, 6, 2, 2, 3, 3, 5, 2, 4, 2, 2, 2, 4, 4, 6, 2,
-	2, 5, 2, 2, 2, 4, 6, 2, 2, 4, 2, 2, 2, 4, 7, 2,
-	6, 6, 2, 2, 2, 3, 5, 2, 3, 2, 2, 2, 3, 4, 6, 2,
-	2, 5, 2, 2, 2, 4, 6, 2, 2, 4, 2, 2, 2, 4, 7, 2,
-];
+/// Offset of interrupt request vector
+pub const IRQ_ADDR: u16 = 65534;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-#[repr(usize)]
-pub enum Opcode {
-	BRK = 0,
-	ORA_IZX,
-	ORA_ZP0 = 5,
-	ASL_ZP0,
-	PHP = 8,
-	ORA_IMM,
-	ASL,
-	ORA_ABS = 0xD,
-	ASL_ABS,
+/// Offset of non-maskable interrupt vector
+pub const NMI_ADDR: u16 = 65530;
 
-	BPL_REL = 0x10,
-	ORA_IZY,
-	ORA_ZPX = 0x15,
-	ASL_ZPX,
-	CLC = 0x18,
-	ORA_ABY,
-	ORA_ABX = 0x1D,
-	ASL_ABX,
-
-	JSR_ABS = 0x20,
-	AND_IZX,
-	BIT_ZP0 = 0x24,
-	AND_ZP0,
-	ROL_ZP0,
-	PLP = 0x28,
-	AND_IMM,
-	ROL,
-	BIT_ABS = 0x2C,
-	AND_ABS,
-	ROL_ABS,
-
-	BMI_REL = 0x30,
-	AND_IZY,
-	AND_ZPX = 0x35,
-	ROL_ZPX,
-	SEC = 0x38,
-	AND_ABY,
-	AND_ABX = 0x3D,
-	ROL_ABX,
-
-	RTI = 0x40,
-	EOR_IZX,
-	EOR_ZP0 = 0x45,
-	LSR_ZP0,
-	PHA = 0x48,
-	EOR_IMM,
-	LSR,
-	JMP_ABS = 0x4C,
-	EOR_ABS,
-	LSR_ABS,
-
-	BVC_REL = 0x50,
-	EOR_IZY,
-	EOR_ZPX = 0x55,
-	LSR_ZPX,
-	CLI = 0x58,
-	EOR_ABY,
-	EOR_ABX = 0x5D,
-	LSR_ABX,
-
-	RTS = 0x60,
-	ADC_IZX,
-	ADC_ZP0 = 0x65,
-	ROR_ZP0,
-	PLA = 0x68,
-	ADC_IMM,
-	ROR,
-	JMP_IND = 0x6C,
-	ABC_ABS,
-	ROR_ABS,
-
-	BVS_REL = 0x70,
-	ADC_IZY,
-	ADC_ZPX = 0x75,
-	ROR_ZPX,
-	SEI = 0x78,
-	ADC_ABY,
-	ADC_ABX = 0x7D,
-	ROR_ABX,
-
-	STA_IZX =
-}
+/// Offset of reset vector
+pub const RESET_ADDR: u16 = 65532;
 
 bitflags! {
+	/// CPU state flags
 	pub struct Status: u8 {
-		const CARRY = 1;
-		const ZERO = 2;
-		const NO_INTERRUPTS = 4;
-		const DECIMAL = 8;
-		const BREAK = 16;
-		const UNUSED = 32;
-		const OVERFLOW = 64;
-		const NEGATIVE = 128;
+		const C = 1;
+		const Z = 2;
+		const I = 4;
+		const D = 8;
+		const B = 16;
+		const U = 32;
+		const V = 64;
+		const N = 128;
 	}
 }
 
 impl Default for Status {
 	fn default() -> Self {
-		Status::UNUSED
+		Status::U
 	}
 }
 
 impl Display for Status {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		if self.contains(Status::CARRY) {
+		if self.contains(Status::C) {
 			write!(f, "C")?;
 		} else {
 			write!(f, "x")?;
 		}
 
-		if self.contains(Status::ZERO) {
+		if self.contains(Status::Z) {
 			write!(f, "Z")?;
 		} else {
 			write!(f, "x")?;
 		}
 
-		if self.contains(Status::NO_INTERRUPTS) {
+		if self.contains(Status::I) {
 			write!(f, "I")?;
 		} else {
 			write!(f, "x")?;
@@ -160,25 +72,25 @@ impl Display for Status {
 			write!(f, "x")?;
 		}
 
-		if self.contains(Status::BREAK) {
+		if self.contains(Status::B) {
 			write!(f, "B")?;
 		} else {
 			write!(f, "x")?;
 		}
 
-		if self.contains(Status::UNUSED) {
+		if self.contains(Status::U) {
 			write!(f, "U")?;
 		} else {
 			write!(f, "x")?;
 		}
 
-		if self.contains(Status::OVERFLOW) {
+		if self.contains(Status::V) {
 			write!(f, "V")?;
 		} else {
 			write!(f, "x")?;
 		}
 
-		if self.contains(Status::NEGATIVE) {
+		if self.contains(Status::N) {
 			write!(f, "N")
 		} else {
 			write!(f, "x")
@@ -186,59 +98,75 @@ impl Display for Status {
 	}
 }
 
+/// CPU registers
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Registers {
-	pub accumulator: u8,
-	pub status: Status,
-	pub x: u8,
-	pub y: u8,
-	pub counter: u16,
-	pub stack_ptr: u16, // actually a 1 byte register, but this avoids casting every use
+	/// accumulator
+	a: u8,
+
+	/// state flags
+	p: Status,
+
+	/// general purpose
+	x: u8,
+
+	/// general purpose
+	y: u8,
+
+	/// program counter
+	pc: u16,
+
+	/// The stack pointer is actually a 1 byte register, but this avoids casting every use
+	s: u16,
 }
 
 impl Display for Registers {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		writeln!(f, "STATUS: {}", self.status)?;
-		writeln!(f, "PC: ${:X}", self.counter)?;
-		writeln!(f, "A: ${:X}", self.accumulator)?;
+		writeln!(f, "P: {}", self.p)?;
+		writeln!(f, "PC: ${:X}", self.pc)?;
+		writeln!(f, "A: ${:X}", self.a)?;
 		writeln!(f, "X: ${:X}", self.x)?;
 		writeln!(f, "Y: ${:X}", self.y)?;
-		writeln!(f, "STACK POINTER: ${:X}", self.stack_ptr)?;
+		writeln!(f, "SP: ${:X}", self.s)?;
 	}
 }
 
+/// CPU cache
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Cache {
-	pub data: u8,
-	pub opcode: u8,
-	pub cycles: u8,
-	pub abs_addr: u16,
-	pub rel_addr: u16,
+	/// last fetched byte
+	data: u8,
+
+	/// last fetched opcode
+	opcode: u8,
+
+	/// remaining cycles on current operation
+	cycles: u8,
+
+	/// last absolute address
+	abs_addr: u16,
+
+	/// last relative address is actually 1 byte, but this avoids casting every use
+	rel_addr: u16,
 }
 
+/// The CPU itself
 #[derive(Clone, Debug)]
 pub struct Processor<'a> {
-	pub bus: &'a Bus<'a>,
-	pub registers: Registers,
-	pub cache: Cache,
-	pub opcodes: [Opcode; OPCODE_TABLE_SIZE],
+	/// Reference to the parent bus
+	bus: &'a Bus<'a>,
+
+	registers: Registers,
+	cache: Cache,
 }
 
 impl<'a> Processor<'a> {
+	/// Initialises a new processor, given a mutable bus reference
 	pub fn new(bus: &'a mut Bus) -> Processor<'a> {
 		Processor {
-			bus: bus,
+			bus,
 			registers: Registers::default(),
 			cache: Cache::default(),
-			opcodes: [NOP; OPCODE_TABLE_SIZE],
-				/*Opcode::new(opcode_id!(b"BRK"), Processor::imm, Processor::brk, 7),
-				Opcode::new(opcode_id!(b"ORA"), Processor::izx, Processor::ora, 6),
-				Opcode::new(opcode_id!(b"BRK"), Processor::imm, Processor::brk, 7),
-				NOP,
-				NOP,
-				NOP,
-				Opcode::new(opcode_id!(b"ORA"), Processor::zp0, Processor::ora, 3),
-			],*/
 		}
 	}
 
@@ -257,7 +185,7 @@ impl<'a> Processor<'a> {
 	#[inline]
 	pub fn branch(&mut self) {
 		self.cache.cycles += 1;
-		self.set_abs(self.counter + self.rel_addr());
+		self.set_abs(self.pc + self.rel_addr());
 
 		// need an additional cycle if different page
 		if self.abs_hi() != (self.counter() & 0xFF00) {
@@ -265,19 +193,19 @@ impl<'a> Processor<'a> {
 		}
 
 		// jump to the address
-		self.set_pc(self.abs_addr());
+		self.set_counter(self.abs_addr());
 	}
 
-	/// Checks specified status flag
+	/// Checks specified p flag
 	#[inline]
-	pub fn check(&self, flag: Status) -> bool {
-		self.registers.status.contains(flag)
+	pub fn check_flag(&self, flag: Status) -> bool {
+		self.registers.p.contains(flag)
 	}
 
 	pub fn clock(&mut self) {
 		if self.cache.cycles == 0 {
-			// get and increment the counter
-			self.cache.opcode = self.read(self.registers.counter);
+			// get and increment the pc
+			self.cache.opcode = self.read(self.registers.pc);
 			self.incr();
 
 			// set our cycles, and see if we need any additional cycles
@@ -289,10 +217,10 @@ impl<'a> Processor<'a> {
 		self.cache.cycles -= 1;
 	}
 
-	/// Retrieve the program counter value
+	/// Retrieve the program pc value
 	#[inline]
 	pub fn counter(&self) -> u8 {
-		self.registers.counter
+		self.registers.pc
 	}
 
 	/// Fetch data from an operation
@@ -304,16 +232,16 @@ impl<'a> Processor<'a> {
 		self.get_data()
 	}
 
-	#[inline]
 	/// Fetch address
+	#[inline]
 	pub fn fetch_addr(&mut self) -> u16 {
-		((self.read(self.abs_addr()) as u16) << 8) | (self.read(self.abs_addr() + 1) as u16);
+		((self.read(self.abs_addr()) as u16) << 8) | (self.read(self.abs_addr() + 1) as u16)
 	}
 
-	/// Gets the accumulator register value
+	/// Gets the a register value
 	#[inline]
 	pub fn get_a(&mut self) -> u8 {
-		self.registers.accumulator
+		self.registers.a
 	}
 
 	/// Gets the currently cached data byte
@@ -334,27 +262,27 @@ impl<'a> Processor<'a> {
 		self.registers.y
 	}
 
-	/// Increment program counter registry by 1
+	/// Increment program pc registry by 1
 	#[inline]
 	pub fn incr(&mut self) {
-		self.registers.counter += 1;
+		self.registers.pc += 1;
 	}
 
 	/// Interrupts the execution state
 	#[inline]
 	pub fn interrupt(&mut self, new_abs_addr: u16, new_cycles: u8) {
-		// write the counter's current value to stack
+		// write the pc's current value to stack
 		self.stack_write_addr(self.counter());
 
-		// write status register to stack too
-		self.set_flag(Status::BREAK, false);
-		self.set_flag(Status::UNUSED, true);
-		self.set_flag(Status::NO_INTERRUPTS, true);
-		self.stack_write(self.status_bits());
+		// write p register to stack too
+		self.set_flag(Status::B, false);
+		self.set_flag(Status::U, true);
+		self.set_flag(Status::I, true);
+		self.stack_write(self.p_bits());
 
-		// get the new counter value
+		// get the new pc value
 		self.set_abs(new_abs_addr);
-		self.set_pc(self.fetch_addr());
+		self.set_counter(self.fetch_addr());
 
 		self.cache.cycles = new_cycles;
 	}
@@ -413,10 +341,10 @@ impl<'a> Processor<'a> {
 		self.set_flag(Status::default());
 		self.set_x(0);
 		self.set_y(0);
-		self.registers.stack_ptr = 254;
+		self.registers.s = 254;
 
 		self.set_abs(RESET_ADDR);
-		self.set_pc(self.fetch_addr());
+		self.set_counter(self.fetch_addr());
 
 		self.cache.rel_addr = 0;
 		self.set_abs(0);
@@ -425,10 +353,10 @@ impl<'a> Processor<'a> {
 		self.cache.cycles = 8;
 	}
 
-	/// Sets accumulator register value
+	/// Sets a register value
 	#[inline]
 	pub fn set_a(&mut self, value: u8) {
-		self.registers.accumulator = value;
+		self.registers.a = value;
 	}
 
 	/// Sets cached absolute address
@@ -443,16 +371,16 @@ impl<'a> Processor<'a> {
 		self.cache.data = value;
 	}
 
-	/// Sets program counter register value
+	/// Sets program pc register value
 	#[inline]
-	pub fn set_pc(&mut self, value: u16) {
-		self.registers.counter = value;
+	pub fn set_counter(&mut self, value: u16) {
+		self.registers.pc = value;
 	}
 
-	/// Sets status register flag
+	/// Sets p register flag
 	#[inline]
 	pub fn set_flag(&mut self, flags: Status, condition: bool) {
-		self.registers.status.set(flags, condition);
+		self.registers.p.set(flags, condition);
 	}
 
 	/// Sets X register value
@@ -469,15 +397,15 @@ impl<'a> Processor<'a> {
 
 	/// Gets the stack pointer value
 	#[inline]
-	pub fn stack_ptr(&mut self) -> u16 {
-		self.registers.stack_ptr
+	pub fn s(&mut self) -> u16 {
+		self.registers.s
 	}
 
 	/// Convenience function to read from stack
 	#[inline]
 	pub fn stack_read(&mut self) {
-		self.registers.stack_ptr += 1;
-		self.read(STACK_ADDR + self.stack_ptr());
+		self.registers.s += 1;
+		self.read(STACK_ADDR + self.s());
 	}
 
 	/// Reads an address from stack
@@ -489,8 +417,8 @@ impl<'a> Processor<'a> {
 	/// Convenience function to write to stack
 	#[inline]
 	pub fn stack_write(&mut self, data: u8) {
-		self.write(STACK_ADDR + self.stack_ptr(), data);
-		self.registers.stack_ptr -= 1;
+		self.write(STACK_ADDR + self.s(), data);
+		self.registers.s -= 1;
 	}
 
 	/// Writes an address to stack
@@ -500,16 +428,16 @@ impl<'a> Processor<'a> {
 		self.stack_write((addr & 255) as u8);
 	}
 
-	/// Retrieve the registry status flags
+	/// Retrieve the registry p flags
 	#[inline]
-	pub fn status(&self) -> Status {
-		self.registers.status
+	pub fn p(&self) -> Status {
+		self.registers.p
 	}
 
-	/// Retrieve the registry status flag bits
+	/// Retrieve the registry p flag bits
 	#[inline]
-	pub fn status_bits(&self) -> u8 {
-		self.registers.status.bits()
+	pub fn p_bits(&self) -> u8 {
+		self.registers.p.bits()
 	}
 
 	/// Absolute address mode
@@ -544,15 +472,15 @@ impl<'a> Processor<'a> {
 
 	/// Addition with carry
 	pub fn adc(&mut self) -> u8 {
-		let _ = self.fetch();
-		let carry = if self.check(Status::CARRY) { 1 } else { 0 };
+		let _ = self.fetch_byte();
+		let carry = if self.check_flag(Status::C) { 1 } else { 0 };
 		let temp16 = (self.get_a() as u16) + (self.get_data() as u16) + carry;
 
-		self.set_flag(Status::CARRY, temp16 > 255);
-		self.set_flag(Status::ZERO, temp16 & 255 == 0);
-		self.set_flag(Status::NEGATIVE, temp16 & 128 != 0);
+		self.set_flag(Status::C, temp16 > 255);
+		self.set_flag(Status::Z, temp16 & 255 == 0);
+		self.set_flag(Status::N, temp16 & 128 != 0);
 
-		self.set_flag(Status::OVERFLOW, !(((self.get_a() as u16) ^ (self.get_data() as u16)) &
+		self.set_flag(Status::V, !(((self.get_a() as u16) ^ (self.get_data() as u16)) &
 			((self.get_a() as u16) ^ temp16)) & 128);
 
 		self.set_a((temp16 & 255) as u8);
@@ -562,22 +490,22 @@ impl<'a> Processor<'a> {
 
 	/// Bitwise and
 	pub fn and(&mut self) -> u8 {
-		let _ = self.fetch();
-		self.registers.accumulator &= self.get_data();
-		self.set_flag(Status::ZERO, self.get_a() == 0);
-		self.set_flag(Status::NEGATIVE, self.get_a() & 128 != 0);
+		let _ = self.fetch_byte();
+		self.registers.a &= self.get_data();
+		self.set_flag(Status::Z, self.get_a() == 0);
+		self.set_flag(Status::N, self.get_a() & 128 != 0);
 
 		1
 	}
 
 	/// Arithmetical left shift
 	pub fn asl(&mut self) -> u8 {
-		let _ = self.fetch();
+		let _ = self.fetch_byte();
 		let temp16 = (self.get_data() as u16) << 1;
 
-		self.set_flag(Status::CARRY, temp16 & 0xFF > 0);
-		self.set_flag(Status::ZERO, temp16 & 255 == 0);
-		self.set_flag(Status::NEGATIVE, temp16 & 128 != 0);
+		self.set_flag(Status::C, temp16 & 0xFF > 0);
+		self.set_flag(Status::Z, temp16 & 255 == 0);
+		self.set_flag(Status::N, temp16 & 128 != 0);
 
 		if self.oc_addr_mode(self.oc_index()) == Processor::imp {
 			self.set_a((temp16 & 255) as u8);
@@ -590,7 +518,7 @@ impl<'a> Processor<'a> {
 
 	/// Branching if carry clear
 	pub fn bcc(&mut self) -> u8 {
-		if !self.check(Status::CARRY) {
+		if !self.check_flag(Status::C) {
 			self.branch();
 		}
 
@@ -599,16 +527,16 @@ impl<'a> Processor<'a> {
 
 	/// Branching if carry
 	pub fn bcs(&mut self) -> u8 {
-		if self.check(Status::CARRY) {
+		if self.check_flag(Status::C) {
 			self.branch();
 		}
 
 		0
 	}
 
-	/// Branching if carry
+	/// Branching if equal (zero)
 	pub fn beq(&mut self) -> u8 {
-		if self.check(Status::ZERO) {
+		if self.check_flag(Status::Z) {
 			self.branch();
 		}
 
@@ -617,16 +545,16 @@ impl<'a> Processor<'a> {
 
 	/// Branching if negative
 	pub fn bmi(&mut self) -> u8 {
-		if self.check(Status::NEGATIVE) {
+		if self.check_flag(Status::N) {
 			self.branch();
 		}
 
 		0
 	}
 
-	/// Branching if not equal
+	/// Branching if not equal (non-zero)
 	pub fn bne(&mut self) -> u8 {
-		if !self.check(Status::ZERO) {
+		if !self.check_flag(Status::Z) {
 			self.branch();
 		}
 
@@ -635,7 +563,7 @@ impl<'a> Processor<'a> {
 
 	/// Branching if positive
 	pub fn bpl(&mut self) -> u8 {
-		if !self.check(Status::NEGATIVE) {
+		if !self.check_flag(Status::N) {
 			self.branch();
 		}
 
@@ -648,20 +576,20 @@ impl<'a> Processor<'a> {
 
 		self.incr();
 
-		self.set_flag(Status::NO_INTERRUPTS, true);
+		self.set_flag(Status::I, true);
 		self.stack_write_addr(self.counter());
 
-		self.set_flag(Status::BREAK, true);
-		self.stack_write(self.status_bits());
-		self.set_flag(Status::BREAK, false);
+		self.set_flag(Status::B, true);
+		self.stack_write(self.p_bits());
+		self.set_flag(Status::B, false);
 
-		self.set_pc(self.read_addr(IRQ_ADDR));
+		self.set_counter(self.read_addr(IRQ_ADDR));
 		0
 	}
 
 	/// Branching if overflow
 	pub fn bvc(&mut self) -> u8 {
-		if self.check(Status::OVERFLOW) {
+		if self.check_flag(Status::V) {
 			self.branch();
 		}
 
@@ -670,34 +598,34 @@ impl<'a> Processor<'a> {
 
 	/// Branching if not overflow
 	pub fn bvs(&mut self) -> u8 {
-		if !self.check(Status::OVERFLOW) {
+		if !self.check_flag(Status::V) {
 			self.branch();
 		}
 
 		0
 	}
 
-	/// Clear carry status bit
+	/// Clear carry bit
 	pub fn clc(&mut self) -> u8 {
-		self.set_flag(Status::CARRY, false);
+		self.set_flag(Status::C, false);
 		0
 	}
 
-	/// Clear decimal status bit
+	/// Clear decimal bit
 	pub fn cld(&mut self) -> u8 {
 		self.set_flag(Status::DECIMAL, false);
 		0
 	}
 
-	/// Clear interrupt disable status bit
+	/// Clear interrupt disable bit
 	pub fn cli(&mut self) -> u8 {
-		self.set_flag(Status::NO_INTERRUPTS, false);
+		self.set_flag(Status::I, false);
 		0
 	}
 
-	/// Clear overflow status bit
+	/// Clear overflow bit
 	pub fn clv(&mut self) -> u8 {
-		self.set_flag(Status::OVERFLOW, false);
+		self.set_flag(Status::V, false);
 		0
 	}
 
@@ -731,7 +659,7 @@ impl<'a> Processor<'a> {
 
 	/// Interrupt request
 	pub fn irq(&mut self) {
-		if !self.check(Status::NO_INTERRUPTS) {
+		if !self.check_flag(Status::I) {
 			self.interrupt(IRQ_ADDR, 7);
 		}
 	}
@@ -774,17 +702,17 @@ impl<'a> Processor<'a> {
 	pub fn nop(&self) {
 	}
 
-	/// Push accumulator to the stack
+	/// Push a to the stack
 	pub fn pha(&mut self) -> u8 {
 		self.stack_write(self.get_a());
 		0
 	}
 
-	/// Pop accumulator from the stack
+	/// Pop a from the stack
 	pub fn pla(&mut self) -> u8 {
 		self.set_a(self.stack_read());
-		self.set_flag(Status::ZERO, self.get_a() == 0);
-		self.set_flag(Status::NEGATIVE, self.get_a() & 128 != 0);
+		self.set_flag(Status::Z, self.get_a() == 0);
+		self.set_flag(Status::N, self.get_a() & 128 != 0);
 
 		0
 	}
@@ -794,7 +722,7 @@ impl<'a> Processor<'a> {
 		self.cache.rel_addr = self.read(self.counter());
 		self.incr();
 
-		// check for signed bit
+		// check_flag for signed bit
 		if self.rel_addr() & 128 != 0 {
 			self.cache.rel_addr |= 0xFF00;
 		}
@@ -804,28 +732,28 @@ impl<'a> Processor<'a> {
 
 	/// Restores state from interrupt
 	pub fn rti(&mut self) -> u8 {
-		// restore status flags
-		self.registers.status = Status::from_bits_truncate(self.stack_read());
-		self.registers.status &= !Status::BREAK;
-		self.registers.status &= !Status::UNUSED;
+		// restore p flags
+		self.registers.p = Status::from_bits_truncate(self.stack_read());
+		self.registers.p &= !Status::B;
+		self.registers.p &= !Status::U;
 
-		// and counter
-		self.set_pc(self.stack_read_rom_addr());
+		// and pc
+		self.set_counter(self.stack_read_rom_addr());
 
 		0
 	}
 
 	/// Subtraction with carry
 	pub fn sdc(&mut self) -> u8 {
-		let _ = self.fetch();
+		let _ = self.fetch_byte();
 		let value = (self.get_data() as u16) ^ 255; // invert the value
-		let carry = if self.check(Status::CARRY) { 1 } else { 0 };
+		let carry = if self.check_flag(Status::C) { 1 } else { 0 };
 		let temp16 = (self.get_a() as u16) + value + carry;
 
-		self.set_flag(Status::CARRY, temp16 & 0xFF00 != 0);
-		self.set_flag(Status::ZERO, temp16 & 255 == 0);
-		self.set_flag(Status::OVERFLOW, (temp16 ^ (self.get_a() as u16)) & (temp16 ^ value) & 128);
-		self.set_flag(Status::NEGATIVE, temp16 & 128 != 0);
+		self.set_flag(Status::C, temp16 & 0xFF00 != 0);
+		self.set_flag(Status::Z, temp16 & 255 == 0);
+		self.set_flag(Status::V, (temp16 ^ (self.get_a() as u16)) & (temp16 ^ value) & 128);
+		self.set_flag(Status::N, temp16 & 128 != 0);
 
 		self.set_a((temp16 & 255) as u8);
 

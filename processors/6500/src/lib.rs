@@ -2,8 +2,6 @@ pub mod processor;
 
 use processor::Processor;
 
-pub const RAM_SIZE: usize = 65536;
-
 pub trait Device {
 	fn read(&self, address: u16) -> u8;
 	fn write(&mut self, address: u16, data: u8);
@@ -12,14 +10,14 @@ pub trait Device {
 #[derive(Clone, Debug)]
 pub struct Bus<'a> {
 	pub cpu: Option<Processor<'a>>,
-	pub ram: [u8; RAM_SIZE],
+	pub ram: Vec<u8>,
 }
 
 impl<'a> Bus<'a> {
-	pub fn new() -> Bus<'a> {
+	pub fn new(ramSize: u32) -> Bus<'a> {
 		let mut bus = Bus {
 			cpu: None,
-			ram: [0; RAM_SIZE],
+			ram: vec![0; ramSize],
 		};
 
 		bus.cpu = Processor::new(&mut bus);
