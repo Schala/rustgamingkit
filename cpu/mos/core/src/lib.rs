@@ -36,7 +36,7 @@ const RESET_ADDR: usize = 65532;
 
 bitflags! {
 	/// MOS6500 state flags
-	pub struct Status: u8 {
+	struct Status: u8 {
 		const C = 1;
 		const Z = 2;
 		const I = 4;
@@ -86,12 +86,6 @@ impl Display for Status {
 			write!(f, "x")?;
 		}
 
-		if self.contains(Status::U) {
-			write!(f, "U")?;
-		} else {
-			write!(f, "x")?;
-		}
-
 		if self.contains(Status::V) {
 			write!(f, "V")?;
 		} else {
@@ -132,7 +126,7 @@ impl Display for Mode {
 	}
 }
 
-/// MOS6500 regs
+/// MOS6500 registers
 #[derive(Clone, Copy, Debug)]
 pub struct Registers {
 	/// accumulator
@@ -209,7 +203,7 @@ impl MOS6500 {
 	/// Initialises a new MOS6500, given a bus pointer
 	pub fn new(bus: Box<Bus>) -> MOS6500 {
 		MOS6500 {
-			bus: bus,
+			bus,
 			regs: Registers {
 				a: 0,
 				p: Status::default(),
@@ -1650,7 +1644,7 @@ impl MOS6500 {
 
 	/// Retrieve the registry state flag bits
 	#[inline]
-	fn get_p_bits(&self) -> u8 {
+	const fn get_p_bits(&self) -> u8 {
 		self.regs.p.bits()
 	}
 

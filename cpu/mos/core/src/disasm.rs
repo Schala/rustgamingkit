@@ -1,3 +1,5 @@
+use bitflags::bitflags;
+
 use std::fmt::{
 	Display,
 	Formatter,
@@ -305,16 +307,32 @@ struct Opcode<'a> {
 	mnemonic: &'a str,
 }
 
+bitflags! {
+	/// Disassembler configuration flags
+	#[derive(Default)]
+	pub struct DisassemblyConfig: u8 {
+		/// Output decimal values instead of hex
+		const DECIMAL = 1;
+
+		/// Show offsets
+		const OFFSETS = 2;
+
+		/// Display lowercase
+		const LOWERCASE = 4;
+	}
+}
+
 /// Represents one disassembled instruction
 #[derive(Clone, Debug)]
 pub struct Disassembly {
+	cfg: DisassemblyConfig,
 	addr: u16,
 	code: String,
 }
 
 impl Disassembly {
 	/// Returns one disassembled operation
-	pub fn from_operation(bus: &Bus, offset: &mut usize) -> Disassembly {
+	pub fn from_operation(cfg: DisassemblyConfig, bus: &Bus, offset: &mut usize) -> Disassembly {
 		let start = *offset;
 		let opcode = &OPCODES[bus.get_u8(*offset) as usize];
 		let mut code = opcode.mnemonic.to_owned();
@@ -322,64 +340,113 @@ impl Disassembly {
 
 		match opcode.mode {
 			Mode::IMM => {
-				code += format!(" #${:02X}", bus.get_u8(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" #{}", bus.get_u8(*offset)).as_str();
+				} else {
+					code += format!(" #${:02X}", bus.get_u8(*offset)).as_str();
+				}
 				*offset += 1;
 			},
 			Mode::ZP0 => {
-				code += format!(" ${:02X}", bus.get_u8(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" {}", bus.get_u8(*offset)).as_str();
+				} else {
+					code += format!(" ${:02X}", bus.get_u8(*offset)).as_str();
+				}
 				*offset += 1;
 			},
 			Mode::ZPX => {
-				code += format!(" ${:02X}, X", bus.get_u8(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" {}, X", bus.get_u8(*offset)).as_str();
+				} else {
+					code += format!(" ${:02X}, X", bus.get_u8(*offset)).as_str();
+				}
 				*offset += 1;
 			},
 			Mode::ZPY => {
-				code += format!(" ${:02X}, Y", bus.get_u8(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" {}, Y", bus.get_u8(*offset)).as_str();
+				} else {
+					code += format!(" ${:02X}, Y", bus.get_u8(*offset)).as_str();
+				}
 				*offset += 1;
 			},
 			Mode::IZX => {
-				code += format!(" (${:02X}, X)", bus.get_u8(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" ({}, X)", bus.get_u8(*offset)).as_str();
+				} else {
+					code += format!(" (${:02X}, X)", bus.get_u8(*offset)).as_str();
+				}
 				*offset += 1;
 			},
 			Mode::IZY => {
-				code += format!(" (${:02X}, Y)", bus.get_u8(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" ({}, Y)", bus.get_u8(*offset)).as_str();
+				} else {
+					code += format!(" (${:02X}, Y)", bus.get_u8(*offset)).as_str();
+				}
 				*offset += 1;
 			},
 			Mode::ABS => {
-				code += format!(" ${:04X}", bus.get_u16_le(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" {}", bus.get_u16_le(*offset)).as_str();
+				} else {
+					code += format!(" ${:04X}", bus.get_u16_le(*offset)).as_str();
+				}
 				*offset += 2;
 			},
 			Mode::ABX => {
-				code += format!(" ${:04X}, X", bus.get_u16_le(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" {}, X", bus.get_u16_le(*offset)).as_str();
+				} else {
+					code += format!(" ${:04X}, X", bus.get_u16_le(*offset)).as_str();
+				}
 				*offset += 2;
 			},
 			Mode::ABY => {
-				code += format!(" ${:04X}, Y", bus.get_u16_le(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" {}, Y", bus.get_u16_le(*offset)).as_str();
+				} else {
+					code += format!(" ${:04X}, Y", bus.get_u16_le(*offset)).as_str();
+				}
 				*offset += 2;
 			},
 			Mode::IND => {
-				code += format!(" (${:04X})", bus.get_u16_le(*offset)).as_str();
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" ({})", bus.get_u16_le(*offset)).as_str();
+				} else {
+					code += format!(" (${:04X})", bus.get_u16_le(*offset)).as_str();
+				}
 				*offset += 2;
 			},
 			Mode::REL => {
 				let value = (bus.get_i8(*offset) as i16) + 1;
 				let rel = (*offset as i16) + value;
-				code += format!(" {} [${:04X}]", value as i8, rel as u16).as_str();
+
+				if cfg.contains(DisassemblyConfig::DECIMAL) {
+					code += format!(" {}", rel as u16).as_str();
+				} else {
+					code += format!(" ${:04X}", rel as u16).as_str();
+				}
 				*offset += 1;
 			},
 			_ => (), // implied address mode
 		}
 
-		Disassembly { addr: start as u16, code }
+		if cfg.contains(DisassemblyConfig::LOWERCASE) {
+			code = code.to_lowercase();
+		}
+
+		Disassembly { cfg, addr: start as u16, code }
 	}
 
 	/// Returns a range of disassembled operations in a vector
-	pub fn from_range(bus: &Bus, offset: usize, end: usize) -> Vec<Disassembly> {
+	pub fn from_range(cfg: DisassemblyConfig, bus: &Bus, offset: usize, end: usize) -> Vec<Disassembly> {
 		let mut code = vec![];
 		let mut offset = offset;
 
 		while offset < end {
-			code.push(Self::from_operation(&bus, &mut offset));
+			code.push(Self::from_operation(cfg, &bus, &mut offset));
 		}
 
 		code
@@ -400,29 +467,54 @@ impl Disassembly {
 
 impl Display for Disassembly {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		write!(f, "{:04X}:\t{}", self.get_offset(), self.get_code())
+		if self.cfg.contains(DisassemblyConfig::OFFSETS) {
+			write!(f, "{:04X}:\t", self.get_offset())?;
+		}
+		write!(f, "{}", self.get_code())
 	}
 }
 
 #[cfg(test)]
 mod tests {
-	#[test]
-	fn test_disassemble() {
-		use rgk_processors_core::{
-			Bus,
-			Device
-		};
+	use rgk_processors_core::{
+		Bus,
+		Device
+	};
 
+	use super::*;
+
+	/*#[test]
+	fn test_disassemble() {
 		// 100 Doors - https://rosettacode.org/wiki/100_doors#6502_Assembly
-		let data = &[0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
-		0x01,0xc0,0x65,0xb0,0x12,0x98,0xc9,0x65,0xb0,0x0a,0xaa,0xfe,0x00,0x02,0x84,0x01,0x65,
-		0x01,0x90,0xf2,0xc8,0xd0,0xea,0xa2,0x64,0xbd,0x00,0x02,0x29,0x01,0x9d,0x00,0x02,0xca,
-		0xd0,0xf5];
+		let data = vec![0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
+			0x01,0xc0,0x65,0xb0,0x12,0x98,0xc9,0x65,0xb0,0x0a,0xaa,0xfe,0x00,0x02,0x84,0x01,0x65,
+			0x01,0x90,0xf2,0xc8,0xd0,0xea,0xa2,0x64,0xbd,0x00,0x02,0x29,0x01,0x9d,0x00,0x02,0xca,
+			0xd0,0xf5];
 
 		let mut bus = Box::new(Bus::new(65536));
-		bus.write(666, data);
+		bus.write(666, &data);
 
-		let code = super::Disassembly::from_range(&bus, 666, 666 + 48);
+		let code = Disassembly::from_range(DisassemblyConfig::default(), &bus, 666, 666 + 48);
+
+		for c in code.iter() {
+			println!("{}", c);
+		}
+	}*/
+
+	#[test]
+	fn test_disassemble_with_config() {
+		// 100 Doors - https://rosettacode.org/wiki/100_doors#6502_Assembly
+		let data = vec![0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
+			0x01,0xc0,0x65,0xb0,0x12,0x98,0xc9,0x65,0xb0,0x0a,0xaa,0xfe,0x00,0x02,0x84,0x01,0x65,
+			0x01,0x90,0xf2,0xc8,0xd0,0xea,0xa2,0x64,0xbd,0x00,0x02,0x29,0x01,0x9d,0x00,0x02,0xca,
+			0xd0,0xf5];
+
+		let mut bus = Box::new(Bus::new(65536));
+		bus.write(666, &data);
+
+		let cfg = DisassemblyConfig::DECIMAL | DisassemblyConfig::OFFSETS |
+			DisassemblyConfig::LOWERCASE;
+		let code = Disassembly::from_range(cfg, &bus, 666, 666 + 48);
 
 		for c in code.iter() {
 			println!("{}", c);
