@@ -1,0 +1,5 @@
+[package]
+edition = "2021"
+name = "rgk-processors-core"
+description = "Common functionality for processors for RustGamingKit"
+version = "2023.1.8"

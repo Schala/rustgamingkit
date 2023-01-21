@@ -18,7 +18,7 @@ impl Color {
 		}
 	}
 
-	pub fn to_bgr8880(&self) -> u32 {
+	pub fn to_bgr888(&self) -> u32 {
 		((self.blue * 255.0) as u32) << 24 | ((self.green * 255.0) as u32) << 16 |
 			((self.red * 255.0) as u32) << 8
 	}

@@ -1,6 +1,6 @@
 use std::io::{
 	Read,
-	Result,
+	Result
 };
 
 use ultraviolet::vec::{

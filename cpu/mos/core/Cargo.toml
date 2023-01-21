@@ -1,0 +1,9 @@
+[package]
+edition = "2021"
+name = "rgk-processors-mos"
+description = "MOS CPU emulation"
+version = "2023.1.19"
+
+[dependencies]
+bitflags = "1.3.2"
+rgk_processors_core = { package = "rgk-processors-core", path = "../../core" }

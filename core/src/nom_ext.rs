@@ -1,8 +1,6 @@
 use nom::{
-	branch::alt,
 	bytes::complete::{
 		tag,
-		take_till,
 		take_while
 	},
 	character::complete::{
@@ -13,10 +11,7 @@ use nom::{
 	combinator::value,
 	error::ParseError,
 	IResult,
-	multi::{
-		count,
-		length_data
-	},
+	multi::count,
 	number::complete::{
 		float,
 		le_f32,
@@ -40,7 +35,7 @@ use ultraviolet::vec::{
 	Vec4
 };
 
-/// Parses a C-style line comment
+/// Parses and discards a C-style line comment
 pub fn c_comment<'a, E>(input: &'a str) -> IResult<&'a str, (), E>
 where
 	E: ParseError<&'a str>
@@ -69,7 +64,7 @@ where
 	)(input)
 }
 
-/// Parses a hash-prefixed ('#') line comment
+/// Parses and discards a hash-prefixed ('#') line comment
 pub fn hash_comment<'a, E>(input: &'a str) -> IResult<&'a str, (), E>
 where
 	E: ParseError<&'a str>
