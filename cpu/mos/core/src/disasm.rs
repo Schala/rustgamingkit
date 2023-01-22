@@ -358,7 +358,8 @@ impl Disassembler {
 	/// Adds one disassembled operation
 	pub fn from_operation(&mut self, offset: &mut usize) {
 		let start = *offset;
-		let opcode = &OPCODES[self.bus.get_u8(*offset) as usize];
+		let opbyte = self.bus.get_u8(*offset) as usize;
+		let opcode = &OPCODES[opbyte];
 		let mut code = opcode.mnemonic.to_owned();
 		*offset += 1;
 
@@ -412,11 +413,31 @@ impl Disassembler {
 				*offset += 1;
 			},
 			Mode::ABS => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}", self.bus.get_u16_le(*offset)).as_str();
+				if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
+					let addr = self.bus.get_u16_le(*offset);
+					match opbyte {
+						32 => { // JSR, label is a function
+							self.labels.insert(addr as usize, format!("F_{:04X}", addr));
+						},
+						76 => { // JMP
+							self.labels.insert(addr as usize, format!("L_{:04X}", addr));
+						},
+						_ => (),
+					}
+
+					if let Some(l) = self.get_label_at_offset(addr as usize) {
+						code += format!(" {}", l).as_str();
+					} else {
+						code += format!(" L_{:04X}", addr).as_str();
+					}
 				} else {
-					code += format!(" ${:04X}", self.bus.get_u16_le(*offset)).as_str();
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" {}", self.bus.get_u16_le(*offset)).as_str();
+					} else {
+						code += format!(" ${:04X}", self.bus.get_u16_le(*offset)).as_str();
+					}
 				}
+
 				*offset += 2;
 			},
 			Mode::ABX => {
@@ -436,10 +457,24 @@ impl Disassembler {
 				*offset += 2;
 			},
 			Mode::IND => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" ({})", self.bus.get_u16_le(*offset)).as_str();
+				if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
+					let addr = self.bus.get_u16_le(*offset);
+
+					if opbyte == 108 { // JMP
+						self.labels.insert(addr as usize, format!("L_{:04X}", addr));
+					}
+
+					if let Some(l) = self.get_label_at_offset(addr as usize) {
+						code += format!(" {}", l).as_str();
+					} else {
+						code += format!(" L_{:04X}", addr).as_str();
+					}
 				} else {
-					code += format!(" (${:04X})", self.bus.get_u16_le(*offset)).as_str();
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" ({})", self.bus.get_u16_le(*offset)).as_str();
+					} else {
+						code += format!(" (${:04X})", self.bus.get_u16_le(*offset)).as_str();
+					}
 				}
 				*offset += 2;
 			},
@@ -447,7 +482,7 @@ impl Disassembler {
 				let addr = ((*offset as i16) + (self.bus.get_i8(*offset) as i16) + 1) as usize;
 
 				if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
-					self.labels.insert(addr, format!("L_{:04X}", addr));
+					self.labels.insert(addr, format!("L_{:04X}", addr as u16));
 				}
 
 				if let Some(l) = self.get_label_at_offset(addr) {
