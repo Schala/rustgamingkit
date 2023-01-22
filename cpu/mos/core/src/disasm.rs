@@ -336,7 +336,7 @@ bitflags! {
 }
 
 /// Region type
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 #[repr(u8)]
 pub enum RegionType {
 	/// Region is labelled
@@ -394,6 +394,14 @@ impl Disassembler {
 
 	/// Adds one disassembled operation
 	pub fn from_operation(&mut self, offset: &mut usize) {
+
+		// If the region is data, do nothing
+		if let Some(r) = self.rgns.get(offset) {
+			if r.kind == RegionType::Data {
+				return;
+			}
+		}
+
 		let start = *offset;
 		let opbyte = self.bus.get_u8(*offset) as usize;
 		let opcode = &OPCODES[opbyte];
