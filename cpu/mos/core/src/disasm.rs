@@ -335,13 +335,44 @@ bitflags! {
 	}
 }
 
+/// Region type
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(u8)]
+pub enum RegionType {
+	/// Region is labelled
+	#[default]
+	Label = 0,
+
+	/// Region is a function
+	Function,
+
+	/// Region is data and should not be interpreted as an operation
+	Data,
+}
+
+/// A region of disassembled code
+#[derive(Clone, Debug)]
+pub struct Region {
+	kind: RegionType,
+	label: String,
+}
+
+impl Region {
+	pub fn new(kind: RegionType, label: String) -> Region {
+		Region {
+			kind,
+			label,
+		}
+	}
+}
+
 /// The disassembler itself
 #[derive(Clone, Debug)]
 pub struct Disassembler {
 	cfg: DisassemblerConfig,
 	bus: Rc<Bus>,
 	disasm: IndexMap<usize, String>,
-	labels: IndexMap<usize, String>,
+	rgns: IndexMap<usize, Region>,
 }
 
 impl Disassembler {
@@ -351,8 +382,14 @@ impl Disassembler {
 			cfg: if let Some(conf) = cfg { conf } else { DisassemblerConfig::default() },
 			bus,
 			disasm: IndexMap::new(),
-			labels: Self::init_labels(),
+			rgns: Self::init_regions(),
 		}
+	}
+
+	/// Associates the specified region with the specified offset
+	#[inline]
+	pub fn add_region(&mut self, offset: usize, r: Region) {
+		self.rgns.insert(offset, r);
 	}
 
 	/// Adds one disassembled operation
@@ -417,10 +454,12 @@ impl Disassembler {
 					let addr = self.bus.get_u16_le(*offset);
 					match opbyte {
 						32 => { // JSR, label is a function
-							self.labels.insert(addr as usize, format!("F_{:04X}", addr));
+							self.rgns.insert(addr as usize,
+								Region::new(RegionType::Function, format!("F_{:04X}", addr)));
 						},
 						76 => { // JMP
-							self.labels.insert(addr as usize, format!("L_{:04X}", addr));
+							self.rgns.insert(addr as usize,
+								Region::new(RegionType::Label, format!("L_{:04X}", addr)));
 						},
 						_ => (),
 					}
@@ -461,7 +500,8 @@ impl Disassembler {
 					let addr = self.bus.get_u16_le(*offset);
 
 					if opbyte == 108 { // JMP
-						self.labels.insert(addr as usize, format!("L_{:04X}", addr));
+						self.rgns.insert(addr as usize,
+							Region::new(RegionType::Label, format!("L_{:04X}", addr)));
 					}
 
 					if let Some(l) = self.get_label_at_offset(addr as usize) {
@@ -482,7 +522,8 @@ impl Disassembler {
 				let addr = ((*offset as i16) + (self.bus.get_i8(*offset) as i16) + 1) as usize;
 
 				if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
-					self.labels.insert(addr, format!("L_{:04X}", addr as u16));
+					self.rgns.insert(addr,
+						Region::new(RegionType::Label, format!("L_{:04X}", addr as u16)));
 				}
 
 				if let Some(l) = self.get_label_at_offset(addr) {
@@ -530,37 +571,31 @@ impl Disassembler {
 
 	/// Returns the label at the given offset, if any
 	pub fn get_label_at_offset(&self, offset: usize) -> Option<&str> {
-		if let Some(s) = self.labels.get(&offset) {
-			Some(s.as_str())
+		if let Some(r) = self.rgns.get(&offset) {
+			Some(r.label.as_str())
 		} else {
 			None
 		}
 	}
 
-	/// Initialises the label map with hardcoded vectors
-	fn init_labels() -> IndexMap<usize, String> {
+	/// Initialises the region map with hardcoded vectors
+	fn init_regions() -> IndexMap<usize, Region> {
 		let mut map = IndexMap::new();
 
-		map.insert(IRQ_ADDR, "IRQ".to_owned());
-		map.insert(NMI_ADDR, "NMI".to_owned());
-		map.insert(RESET_ADDR, "RESET".to_owned());
-		map.insert(STACK_ADDR, "STACK".to_owned());
+		map.insert(IRQ_ADDR, Region::new(RegionType::Data, "IRQ".to_owned()));
+		map.insert(NMI_ADDR, Region::new(RegionType::Data, "NMI".to_owned()));
+		map.insert(RESET_ADDR, Region::new(RegionType::Data, "RESET".to_owned()));
+		map.insert(STACK_ADDR, Region::new(RegionType::Data, "STACK".to_owned()));
 
 		map
-	}
-
-	/// Associates the specified label with the specified offset
-	pub fn put_label_at_offset(&mut self, offset: usize, label: &str) {
-		if !self.disasm.contains_key(&offset) { return };
-		self.labels.insert(offset, label.to_owned());
 	}
 }
 
 impl Display for Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		for (o, c) in self.disasm.iter() {
-			if let Some(l) = self.labels.get(o) {
-				writeln!(f, "\n\t{}:", l)?;
+			if let Some(r) = self.rgns.get(o) {
+				writeln!(f, "\n\t{}:", r.label)?;
 			}
 
 			if self.cfg.contains(DisassemblerConfig::OFFSETS) {
