@@ -19,20 +19,19 @@ use rgk_processors_core::{
 pub use disasm::*;
 
 /// Offset of program stack
-const STACK_ADDR: usize = 256;
+pub const STACK_ADDR: usize = 256;
 
 /// Offset of stack pointer initiation
 const STACK_INIT: usize = 253;
 
 /// Offset of interrupt request vector
-const IRQ_ADDR: usize = 65534;
+pub const IRQ_ADDR: usize = 65534;
 
 /// Offset of non-maskable interrupt vector
-#[allow(dead_code)]
-const NMI_ADDR: usize = 65530;
+pub const NMI_ADDR: usize = 65530;
 
 /// Offset of reset vector
-const RESET_ADDR: usize = 65532;
+pub const RESET_ADDR: usize = 65532;
 
 bitflags! {
 	/// MOS6500 state flags
