@@ -358,11 +358,16 @@ pub struct Region {
 }
 
 impl Region {
-	pub fn new(kind: RegionType, label: String) -> Region {
+	pub fn new(kind: RegionType, label: &str) -> Region {
 		Region {
 			kind,
-			label,
+			label: label.to_owned(),
 		}
+	}
+
+	#[inline]
+	pub fn get_label(&self) -> &str {
+		self.label.as_str()
 	}
 }
 
@@ -391,6 +396,13 @@ impl Disassembler {
 	pub fn add_region(&mut self, offset: usize, r: Region) {
 		self.rgns.insert(offset, r);
 	}
+
+	/// Analyses the code by running an emulation, starting at the given offset
+	/*pub fn analyze(&mut self, offset: usize) {
+		let opbyte = self.bus.get_u8(*offset);
+
+
+	}*/
 
 	/// Adds one disassembled operation
 	pub fn from_operation(&mut self, offset: &mut usize) {
@@ -458,24 +470,13 @@ impl Disassembler {
 				*offset += 1;
 			},
 			Mode::ABS => {
-				if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
-					let addr = self.bus.get_u16_le(*offset);
-					match opbyte {
-						32 => { // JSR, label is a function
-							self.rgns.insert(addr as usize,
-								Region::new(RegionType::Function, format!("F_{:04X}", addr)));
-						},
-						76 => { // JMP
-							self.rgns.insert(addr as usize,
-								Region::new(RegionType::Label, format!("L_{:04X}", addr)));
-						},
-						_ => (),
-					}
+				let addr = self.bus.get_u16_le(*offset) + 2;
 
-					if let Some(l) = self.get_label_at_offset(addr as usize) {
-						code += format!(" {}", l).as_str();
-					} else {
-						code += format!(" L_{:04X}", addr).as_str();
+				if let Some(l) = self.get_label_at_offset(addr as usize) {
+					if opbyte == 32 || opbyte == 76 {
+						if let Some(l) = self.get_label_at_offset(addr as usize) {
+							code += format!(" {}", l).as_str();
+						}
 					}
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -504,19 +505,10 @@ impl Disassembler {
 				*offset += 2;
 			},
 			Mode::IND => {
-				if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
-					let addr = self.bus.get_u16_le(*offset);
+				let addr = self.bus.get_u16_le(*offset) + 2;
 
-					if opbyte == 108 { // JMP
-						self.rgns.insert(addr as usize,
-							Region::new(RegionType::Label, format!("L_{:04X}", addr)));
-					}
-
-					if let Some(l) = self.get_label_at_offset(addr as usize) {
-						code += format!(" {}", l).as_str();
-					} else {
-						code += format!(" L_{:04X}", addr).as_str();
-					}
+				if let Some(l) = self.get_label_at_offset(addr as usize) {
+					code += format!(" {}", l).as_str();
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
 						code += format!(" ({})", self.bus.get_u16_le(*offset)).as_str();
@@ -527,24 +519,15 @@ impl Disassembler {
 				*offset += 2;
 			},
 			Mode::REL => {
-				let addr = ((*offset as i16) + (self.bus.get_i8(*offset) as i16) + 1) as usize;
+				let addr = ((*offset as i32) + (self.bus.get_i8(*offset) as i32) + 1) as u16;
 
-				if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
-					self.rgns.insert(addr,
-						Region::new(RegionType::Label, format!("L_{:04X}", addr as u16)));
-				}
-
-				if let Some(l) = self.get_label_at_offset(addr) {
+				if let Some(l) = self.get_label_at_offset(addr as usize) {
 					code += format!(" {}", l).as_str();
 				} else {
-					if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
-						code += format!(" L_{:04X}", addr).as_str();
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" {}", addr).as_str();
 					} else {
-						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-							code += format!(" {}", addr).as_str();
-						} else {
-							code += format!(" ${:04X}", addr).as_str();
-						}
+						code += format!(" ${:04X}", addr).as_str();
 					}
 				}
 				*offset += 1;
@@ -560,12 +543,57 @@ impl Disassembler {
 	}
 
 	/// Adds a range of disassembled operations
-	pub fn from_range(&mut self, offset: usize, end: usize) {
-		let mut offset = offset;
+	pub fn from_range(&mut self, start: usize, end: usize) {
+		let mut offset = start;
+
+		if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
+			self.generate_regions(start, end);
+		}
 
 		while offset < end {
 			self.from_operation(&mut offset);
 		}
+	}
+
+	/// Generates and adds labels between the given start and end offsets
+	fn generate_regions(&mut self, start: usize, end: usize) {
+		let mut offset = start;
+
+		while offset < end {
+			let op = self.bus.get_u8(offset) as usize;
+			let mode = OPCODES[op].mode;
+			offset += 1;
+
+			match mode {
+				Mode::REL => {
+					let addr = ((offset as i32) + (self.bus.get_i8(offset) as i32) + 1) as u16;
+					self.rgns.insert(addr as usize, Region::new(RegionType::Label,
+						format!("L_{:04X}", addr).as_str()));
+
+					offset += 1;
+				},
+				Mode::ABS | Mode::IND => {
+					let addr = self.bus.get_u16_le(offset) + 2;
+
+					match op {
+						32 => { // JSR, label is a function
+							self.rgns.insert(addr as usize,
+								Region::new(RegionType::Function, format!("F_{:04X}", addr).as_str()));
+						},
+						76 | 108 => { // JMP
+							self.rgns.insert(addr as usize,
+								Region::new(RegionType::Label, format!("L_{:04X}", addr).as_str()));
+						},
+						_ => (),
+					}
+
+					offset += 2;
+				},
+				_ => (),
+			}
+		}
+
+		self.rgns.sort_keys()
 	}
 
 	/// Returns the code at the given offset, if any
@@ -586,14 +614,20 @@ impl Disassembler {
 		}
 	}
 
+	/// Returns a reference to the map of regions
+	#[inline]
+	pub fn get_regions(&self) -> &IndexMap<usize, Region> {
+		&self.rgns
+	}
+
 	/// Initialises the region map with hardcoded vectors
 	fn init_regions() -> IndexMap<usize, Region> {
 		let mut map = IndexMap::new();
 
-		map.insert(IRQ_ADDR, Region::new(RegionType::Data, "IRQ".to_owned()));
-		map.insert(NMI_ADDR, Region::new(RegionType::Data, "NMI".to_owned()));
-		map.insert(RESET_ADDR, Region::new(RegionType::Data, "RESET".to_owned()));
-		map.insert(STACK_ADDR, Region::new(RegionType::Data, "STACK".to_owned()));
+		map.insert(IRQ_ADDR, Region::new(RegionType::Data, "IRQ"));
+		map.insert(NMI_ADDR, Region::new(RegionType::Data, "NMI"));
+		map.insert(RESET_ADDR, Region::new(RegionType::Data, "RESET"));
+		map.insert(STACK_ADDR, Region::new(RegionType::Data, "STACK"));
 
 		map
 	}
@@ -663,7 +697,7 @@ mod tests {
 		println!("{}", da);
 	}*/
 
-	#[test]
+	/*#[test]
 	fn test_disassemble_with_labels() {
 		// 100 Doors - https://rosettacode.org/wiki/100_doors#6502_Assembly
 		let data = vec![0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
@@ -677,6 +711,63 @@ mod tests {
 		let cfg = DisassemblerConfig::AUTO_LABELS | DisassemblerConfig::OFFSETS;
 		let mut da = Disassembler::new(Rc::new(bus), Some(cfg));
 		da.from_range(0, 48);
+
+		println!("{}", da);
+	}*/
+
+	/*#[test]
+	fn test_generate_regions() {
+		// 100 Doors - https://rosettacode.org/wiki/100_doors#6502_Assembly
+		/*let data = vec![0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
+			0x01,0xc0,0x65,0xb0,0x12,0x98,0xc9,0x65,0xb0,0x0a,0xaa,0xfe,0x00,0x02,0x84,0x01,0x65,
+			0x01,0x90,0xf2,0xc8,0xd0,0xea,0xa2,0x64,0xbd,0x00,0x02,0x29,0x01,0x9d,0x00,0x02,0xca,
+			0xd0,0xf5];*/
+		let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
+
+		let mut bus = Bus::new(65536);
+		bus.write(32768, &mario[16..32784]);
+
+		let cfg = DisassemblerConfig::AUTO_LABELS | DisassemblerConfig::OFFSETS;
+		let mut da = Disassembler::new(Rc::new(bus), Some(cfg));
+		da.from_range(32768, 65530);
+
+		let rm = da.get_regions();
+
+		for (o, r) in rm.iter() {
+			println!("{:04X}: {}", o, r.label);
+		}
+	}*/
+
+	#[test]
+	fn test_disassemble_nes_rom() {
+		let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
+
+		let mut bus = Bus::new(65536);
+		bus.write(32768, &mario[16..32784]);
+
+		let cfg = DisassemblerConfig::AUTO_LABELS | DisassemblerConfig::OFFSETS;
+		let mut da = Disassembler::new(Rc::new(bus), Some(cfg));
+
+		// https://datacrystal.romhacking.net/wiki/Super_Mario_Bros.:ROM_map
+		/*da.add_region(0x85DF, Region::new(RegionType::Data, "SKY_BG_UNDERWATER"));
+		da.add_region(0x85E0, Region::new(RegionType::Data, "SKY_BG_OVERWORLD"));
+		da.add_region(0x85E1, Region::new(RegionType::Data, "BG_UNDERGROUND"));
+		da.add_region(0x85E2, Region::new(RegionType::Data, "BG_CASTLE"));
+		da.add_region(0x85E3, Region::new(RegionType::Data, "BG_NIGHT"));
+		da.add_region(0x85E4, Region::new(RegionType::Data, "BG_WINTER"));
+		da.add_region(0x85E5, Region::new(RegionType::Data, "BG_WINTER_NIGHT"));
+		da.add_region(0x85E6, Region::new(RegionType::Data, "BG_6_3"));
+		da.add_region(0x8C00, Region::new(RegionType::Data, "CHR_IDX_NORMAL_BLOCK"));
+		da.add_region(0x8C08, Region::new(RegionType::Data, "CHR_IDX_BLOCK_8C08"));
+		da.add_region(0x8C10, Region::new(RegionType::Data, "CHR_IDX_STAR_BLOCK"));
+		da.add_region(0x8C12, Region::new(RegionType::Data, "CHR_IDX_POWERUP_BLOCK"));
+		da.add_region(0x8C16, Region::new(RegionType::Data, "CHR_IDX_BEANSTALK_BLOCK"));
+		da.add_region(0x8C1C, Region::new(RegionType::Data, "CHR_IDX_MULTICOIN_BLOCK"));
+		da.add_region(0x8C20, Region::new(RegionType::Data, "CHR_IDX_BLOCK_8C20"));
+		da.add_region(0x8C9C, Region::new(RegionType::Data, "CHR_IDX_COIN_QBLOCK"));
+		da.add_region(0x8CA0, Region::new(RegionType::Data, "CHR_IDX_POWERUP_QBLOCK"));*/
+
+		da.from_range(32768, 65530);
 
 		println!("{}", da);
 	}
