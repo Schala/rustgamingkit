@@ -355,6 +355,7 @@ pub enum RegionType {
 pub struct Region {
 	kind: RegionType,
 	label: String,
+	refs: Vec<usize>,
 }
 
 impl Region {
@@ -362,12 +363,23 @@ impl Region {
 		Region {
 			kind,
 			label: label.to_owned(),
+			refs: vec![],
 		}
+	}
+
+	#[inline]
+	fn add_ref(&mut self, addr: usize) {
+		self.refs.push(addr);
 	}
 
 	#[inline]
 	pub fn get_label(&self) -> &str {
 		self.label.as_str()
+	}
+
+	#[inline]
+	pub fn get_refs(&self) -> &[usize] {
+		self.refs.as_ref()
 	}
 }
 
@@ -470,13 +482,12 @@ impl Disassembler {
 				*offset += 1;
 			},
 			Mode::ABS => {
-				let addr = self.bus.get_u16_le(*offset) + 2;
+				let addr = (self.bus.get_u16_le(*offset) + 2) as usize;
 
-				if let Some(l) = self.get_label_at_offset(addr as usize) {
+				if let Some(r) = self.rgns.get_mut(&addr) {
 					if opbyte == 32 || opbyte == 76 {
-						if let Some(l) = self.get_label_at_offset(addr as usize) {
-							code += format!(" {}", l).as_str();
-						}
+						code += format!(" {}", r.label).as_str();
+						r.add_ref(start);
 					}
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -505,10 +516,11 @@ impl Disassembler {
 				*offset += 2;
 			},
 			Mode::IND => {
-				let addr = self.bus.get_u16_le(*offset) + 2;
+				let addr = (self.bus.get_u16_le(*offset) + 2) as usize;
 
-				if let Some(l) = self.get_label_at_offset(addr as usize) {
-					code += format!(" {}", l).as_str();
+				if let Some(r) = self.rgns.get_mut(&addr) {
+					code += format!(" {}", r.label).as_str();
+					r.add_ref(start);
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
 						code += format!(" ({})", self.bus.get_u16_le(*offset)).as_str();
@@ -519,15 +531,16 @@ impl Disassembler {
 				*offset += 2;
 			},
 			Mode::REL => {
-				let addr = ((*offset as i32) + (self.bus.get_i8(*offset) as i32) + 1) as u16;
+				let addr = ((*offset as i32) + (self.bus.get_i8(*offset) as i32) + 1) as usize;
 
-				if let Some(l) = self.get_label_at_offset(addr as usize) {
-					code += format!(" {}", l).as_str();
+				if let Some(r) = self.rgns.get_mut(&addr) {
+					code += format!(" {}", r.label).as_str();
+					r.add_ref(start);
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-						code += format!(" {}", addr).as_str();
+						code += format!(" {}", addr as u16).as_str();
 					} else {
-						code += format!(" ${:04X}", addr).as_str();
+						code += format!(" ${:04X}", addr as u16).as_str();
 					}
 				}
 				*offset += 1;
@@ -637,7 +650,11 @@ impl Display for Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		for (o, c) in self.disasm.iter() {
 			if let Some(r) = self.rgns.get(o) {
-				writeln!(f, "\n\t{}:", r.label)?;
+				write!(f, "\n\t{}:\t\t; REFS: ", r.label)?;
+				for x in r.refs.iter() {
+					write!(f, "{:04X} ", x)?;
+				}
+				writeln!(f, "")?;
 			}
 
 			if self.cfg.contains(DisassemblerConfig::OFFSETS) {
