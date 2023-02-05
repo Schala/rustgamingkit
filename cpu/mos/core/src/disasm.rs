@@ -11,7 +11,10 @@ use std::{
 	rc::Rc
 };
 
-use crate::Mode;
+use crate::{
+	Mode,
+	MOS6502
+};
 
 use rgk_processors_core::{
 	Bus,
@@ -335,13 +338,13 @@ bitflags! {
 
 /// The disassembler itself
 #[derive(Clone, Debug)]
-pub struct MOS6500Disassembler {
+pub struct MOS6502Disassembler {
 	cfg: DisassemblerConfig,
 	bus: Rc<RefCell<Bus>>,
 	disasm: IndexMap<usize, String>,
 }
 
-impl MOS6500Disassembler {
+impl MOS6502Disassembler {
 	/// Sets up the disassembler
 	pub fn new(bus: Rc<RefCell<Bus>>, cfg: Option<DisassemblerConfig>) -> Self {
 		Self {
@@ -352,7 +355,7 @@ impl MOS6500Disassembler {
 	}
 }
 
-impl Disassembler for MOS6500Disassembler {
+impl Disassembler for MOS6502Disassembler {
 	fn analyze(&mut self, offset: &mut usize) {
 		// If the region isn't a label or function, do nothing
 		if let Some(r) = self.bus.borrow().get_region(*offset) {
@@ -376,10 +379,6 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" #${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::ZPG => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -388,10 +387,6 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" ${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::ZPX => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -400,10 +395,6 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" ${:02X}, X", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::ZPY => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -412,10 +403,6 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" ${:02X}, Y", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::IZX => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -424,10 +411,6 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" (${:02X}, X)", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::IZY => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -436,16 +419,8 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" (${:02X}, Y)", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::ABS => {
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
-
 				let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
 
 				if let Some(r) = self.bus.borrow().get_region(addr) {
@@ -470,10 +445,6 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" ${:04X}, X", self.bus.borrow().get_u16_le(*offset)).as_str();
 				}
 				*offset += 2;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::ABY => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -482,16 +453,8 @@ impl Disassembler for MOS6500Disassembler {
 					code += format!(" ${:04X}, Y", self.bus.borrow().get_u16_le(*offset)).as_str();
 				}
 				*offset += 2;
-
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
 			},
 			Mode::IND => {
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
-
 				let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
 
 				if let Some(r) = self.bus.borrow().get_region(addr) {
@@ -507,10 +470,6 @@ impl Disassembler for MOS6500Disassembler {
 				*offset += 2;
 			},
 			Mode::REL => {
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
-
 				let addr = ((*offset as i32) + (self.bus.borrow().get_i8(*offset) as i32) + 1) as usize;
 
 				if let Some(r) = self.bus.borrow().get_region(addr) {
@@ -525,11 +484,11 @@ impl Disassembler for MOS6500Disassembler {
 				}
 				*offset += 1;
 			},
-			_ => { // implied address mode
-				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-					code = code.to_lowercase();
-				}
-			},
+			_ => (),
+		}
+
+		if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+			code = code.to_lowercase();
 		}
 
 		self.disasm.insert(start, code);
@@ -553,7 +512,7 @@ impl Disassembler for MOS6500Disassembler {
 	}
 }
 
-impl Display for MOS6500Disassembler {
+impl Display for MOS6502Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		for (o, c) in self.disasm.iter() {
 			if let Some(r) = self.bus.borrow().get_region(*o) {
@@ -671,7 +630,8 @@ mod tests {
 		bus.write(32768, &mario[16..32784]);
 
 		let cfg = DisassemblerConfig::LOWERCASE | DisassemblerConfig::OFFSETS;
-		let mut da = MOS6500Disassembler::new(Rc::new(RefCell::new(bus)), Some(cfg));
+		let cpu = MOS6502::new(Rc::new(RefCell::new(bus)));
+		let mut da = MOS6502Disassembler::new(cpu.get_bus(), Some(cfg));
 
 		da.analyze_range(32768, 65530);
 

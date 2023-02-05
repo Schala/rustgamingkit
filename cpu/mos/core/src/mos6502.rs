@@ -251,7 +251,7 @@ pub struct MOS6502 {
 impl MOS6502 {
 	/// Initialises a new 6502, given a bus pointer
 	pub fn new(bus: Rc<RefCell<Bus>>) -> MOS6502 {
-		MOS6502 {
+		let mut cpu = MOS6502 {
 			bus,
 			regs: Registers {
 				a: 0,
@@ -269,7 +269,11 @@ impl MOS6502 {
 				rel_addr: 0,
 				opcode: 0,
 			},
-		}
+		};
+
+		cpu.generate_regions(0, 65536);
+
+		cpu
 	}
 
 	/// Add additional cycles to the current operation
@@ -1244,11 +1248,11 @@ impl DeviceMapBase for MOS6502 {
 					if self.region_exists(addr as usize) {
 						if let Some(r) = self.get_region_mut(addr as usize) {
 							let mut r = r.borrow_mut();
-							r.add_ref(addr as usize);
+							r.add_ref(offset - 1);
 						}
 					} else {
 						let mut r = Region::new(0, RegionType::Label, format!("L_{:04X}", addr).as_str());
-						r.add_ref(addr as usize);
+						r.add_ref(offset - 1);
 						self.add_region(addr as usize, r);
 					}
 
@@ -1263,11 +1267,11 @@ impl DeviceMapBase for MOS6502 {
 							let mut r = r.borrow_mut();
 
 							r.label_to_fn(Some(format!("F_{:04X}", addr & 65535).as_str()));
-							r.add_ref(addr as usize);
+							r.add_ref(offset - 1);
 						}
 					} else {
 						let mut r = Region::new(0, RegionType::Function, format!("F_{:04X}", addr & 65535).as_str());
-						r.add_ref(addr);
+						r.add_ref(offset - 1);
 						self.add_region(addr, r);
 					}
 
@@ -1280,11 +1284,11 @@ impl DeviceMapBase for MOS6502 {
 					if self.region_exists(addr as usize) {
 						if let Some(r) = self.get_region_mut(addr as usize) {
 							let mut r = r.borrow_mut();
-							r.add_ref(addr as usize);
+							r.add_ref(offset - 1);
 						}
 					} else {
 						let mut r = Region::new(0, RegionType::Label, format!("L_{:04X}", addr).as_str());
-						r.add_ref(addr as usize);
+						r.add_ref(offset - 1);
 						self.add_region(addr as usize, r);
 					}
 
