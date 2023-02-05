@@ -1,5 +1,11 @@
 [package]
 edition = "2021"
 name = "rgk-processors-core"
-description = "Common functionality for processors for RustGamingKit"
-version = "2023.1.8"
+description = "Common functionality for processors for emulation"
+version = "2023.2.4"
+
+[features]
+atomic = ["dep:parking_lot"]
+
+[dependencies]
+parking_lot = { version = "0.12.1", optional = true }

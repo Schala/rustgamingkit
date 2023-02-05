@@ -2,6 +2,7 @@ use bitflags::bitflags;
 use indexmap::IndexMap;
 
 use std::{
+	cell::RefCell,
 	fmt::{
 		Display,
 		Formatter,
@@ -10,17 +11,14 @@ use std::{
 	rc::Rc
 };
 
-use crate::{
-	IRQ_ADDR,
-	Mode,
-	NMI_ADDR,
-	RESET_ADDR,
-	STACK_ADDR
-};
+use crate::Mode;
 
 use rgk_processors_core::{
 	Bus,
-	Device
+	Device,
+	DeviceBase,
+	Disassembler,
+	RegionType
 };
 
 static OPCODES: [Opcode; 256] = [
@@ -28,10 +26,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "ORA" },
 	Opcode { mode: Mode::IMP, mnemonic: "NOP" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "ORA" },
-	Opcode { mode: Mode::ZP0, mnemonic: "ASL" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "ORA" },
+	Opcode { mode: Mode::ZPG, mnemonic: "ASL" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "PHP" },
 	Opcode { mode: Mode::IMM, mnemonic: "ORA" },
 	Opcode { mode: Mode::IMP, mnemonic: "ASL" },
@@ -64,10 +62,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "AND" },
 	Opcode { mode: Mode::IMP, mnemonic: "NOP" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "BIT" },
-	Opcode { mode: Mode::ZP0, mnemonic: "AND" },
-	Opcode { mode: Mode::ZP0, mnemonic: "ROL" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "BIT" },
+	Opcode { mode: Mode::ZPG, mnemonic: "AND" },
+	Opcode { mode: Mode::ZPG, mnemonic: "ROL" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "PLP" },
 	Opcode { mode: Mode::IMM, mnemonic: "AND" },
 	Opcode { mode: Mode::IMP, mnemonic: "ROL" },
@@ -100,10 +98,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "EOR" },
 	Opcode { mode: Mode::IMP, mnemonic: "NOP" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "EOR" },
-	Opcode { mode: Mode::ZP0, mnemonic: "LSR" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "EOR" },
+	Opcode { mode: Mode::ZPG, mnemonic: "LSR" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "PHA" },
 	Opcode { mode: Mode::IMM, mnemonic: "EOR" },
 	Opcode { mode: Mode::IMP, mnemonic: "LSR" },
@@ -136,10 +134,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "ADC" },
 	Opcode { mode: Mode::IMP, mnemonic: "NOP" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "ADC" },
-	Opcode { mode: Mode::ZP0, mnemonic: "ROR" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "ADC" },
+	Opcode { mode: Mode::ZPG, mnemonic: "ROR" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "PLA" },
 	Opcode { mode: Mode::IMM, mnemonic: "ADC" },
 	Opcode { mode: Mode::IMP, mnemonic: "ROR" },
@@ -172,10 +170,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "STA" },
 	Opcode { mode: Mode::IMM, mnemonic: "NOP" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "STY" },
-	Opcode { mode: Mode::ZP0, mnemonic: "STA" },
-	Opcode { mode: Mode::ZP0, mnemonic: "STX" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "STY" },
+	Opcode { mode: Mode::ZPG, mnemonic: "STA" },
+	Opcode { mode: Mode::ZPG, mnemonic: "STX" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "DEY" },
 	Opcode { mode: Mode::IMM, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "TXA" },
@@ -208,10 +206,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "LDA" },
 	Opcode { mode: Mode::IMM, mnemonic: "LDX" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "LDY" },
-	Opcode { mode: Mode::ZP0, mnemonic: "LDA" },
-	Opcode { mode: Mode::ZP0, mnemonic: "LDX" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "LDY" },
+	Opcode { mode: Mode::ZPG, mnemonic: "LDA" },
+	Opcode { mode: Mode::ZPG, mnemonic: "LDX" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "TAY" },
 	Opcode { mode: Mode::IMM, mnemonic: "LDA" },
 	Opcode { mode: Mode::IMP, mnemonic: "TAX" },
@@ -244,10 +242,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "CMP" },
 	Opcode { mode: Mode::IMM, mnemonic: "NOP" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "CPY" },
-	Opcode { mode: Mode::ZP0, mnemonic: "CMP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "DEC" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "CPY" },
+	Opcode { mode: Mode::ZPG, mnemonic: "CMP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "DEC" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "INY" },
 	Opcode { mode: Mode::IMM, mnemonic: "CMP" },
 	Opcode { mode: Mode::IMP, mnemonic: "DEX" },
@@ -280,10 +278,10 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::IZX, mnemonic: "SBC" },
 	Opcode { mode: Mode::IMM, mnemonic: "NOP" },
 	Opcode { mode: Mode::IZX, mnemonic: "NOP" },
-	Opcode { mode: Mode::ZP0, mnemonic: "CPX" },
-	Opcode { mode: Mode::ZP0, mnemonic: "SBC" },
-	Opcode { mode: Mode::ZP0, mnemonic: "INC" },
-	Opcode { mode: Mode::ZP0, mnemonic: "NOP" },
+	Opcode { mode: Mode::ZPG, mnemonic: "CPX" },
+	Opcode { mode: Mode::ZPG, mnemonic: "SBC" },
+	Opcode { mode: Mode::ZPG, mnemonic: "INC" },
+	Opcode { mode: Mode::ZPG, mnemonic: "NOP" },
 	Opcode { mode: Mode::IMP, mnemonic: "INX" },
 	Opcode { mode: Mode::IMM, mnemonic: "SBC" },
 	Opcode { mode: Mode::IMP, mnemonic: "NOP" },
@@ -330,104 +328,42 @@ bitflags! {
 		/// Display lowercase
 		const LOWERCASE = 4;
 
-		/// Auto-generate labels
-		const AUTO_LABELS = 8;
-	}
-}
-
-/// Region type
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-#[repr(u8)]
-pub enum RegionType {
-	/// Region is labelled
-	#[default]
-	Label = 0,
-
-	/// Region is a function
-	Function,
-
-	/// Region is data and should not be interpreted as an operation
-	Data,
-}
-
-/// A region of disassembled code
-#[derive(Clone, Debug)]
-pub struct Region {
-	kind: RegionType,
-	label: String,
-	refs: Vec<usize>,
-}
-
-impl Region {
-	pub fn new(kind: RegionType, label: &str) -> Region {
-		Region {
-			kind,
-			label: label.to_owned(),
-			refs: vec![],
-		}
-	}
-
-	#[inline]
-	fn add_ref(&mut self, addr: usize) {
-		self.refs.push(addr);
-	}
-
-	#[inline]
-	pub fn get_label(&self) -> &str {
-		self.label.as_str()
-	}
-
-	#[inline]
-	pub fn get_refs(&self) -> &[usize] {
-		self.refs.as_ref()
+		/// Apply type prefixes to appropriate regions
+		const TYPES = 8;
 	}
 }
 
 /// The disassembler itself
 #[derive(Clone, Debug)]
-pub struct Disassembler {
+pub struct MOS6500Disassembler {
 	cfg: DisassemblerConfig,
-	bus: Rc<Bus>,
+	bus: Rc<RefCell<Bus>>,
 	disasm: IndexMap<usize, String>,
-	rgns: IndexMap<usize, Region>,
 }
 
-impl Disassembler {
+impl MOS6500Disassembler {
 	/// Sets up the disassembler
-	pub fn new(bus: Rc<Bus>, cfg: Option<DisassemblerConfig>) -> Disassembler {
-		Disassembler {
+	pub fn new(bus: Rc<RefCell<Bus>>, cfg: Option<DisassemblerConfig>) -> Self {
+		Self {
 			cfg: if let Some(conf) = cfg { conf } else { DisassemblerConfig::default() },
 			bus,
 			disasm: IndexMap::new(),
-			rgns: Self::init_regions(),
 		}
 	}
+}
 
-	/// Associates the specified region with the specified offset
-	#[inline]
-	pub fn add_region(&mut self, offset: usize, r: Region) {
-		self.rgns.insert(offset, r);
-	}
-
-	/// Analyses the code by running an emulation, starting at the given offset
-	/*pub fn analyze(&mut self, offset: usize) {
-		let opbyte = self.bus.get_u8(*offset);
-
-
-	}*/
-
-	/// Adds one disassembled operation
-	pub fn from_operation(&mut self, offset: &mut usize) {
-
-		// If the region is data, do nothing
-		if let Some(r) = self.rgns.get(offset) {
-			if r.kind == RegionType::Data {
+impl Disassembler for MOS6500Disassembler {
+	fn analyze(&mut self, offset: &mut usize) {
+		// If the region isn't a label or function, do nothing
+		if let Some(r) = self.bus.borrow().get_region(*offset) {
+			let r = r.borrow();
+			if r.get_type() != &RegionType::Label && r.get_type() != &RegionType::Function {
 				return;
 			}
 		}
 
 		let start = *offset;
-		let opbyte = self.bus.get_u8(*offset) as usize;
+		let opbyte = self.bus.borrow().get_u8(*offset) as usize;
 		let opcode = &OPCODES[opbyte];
 		let mut code = opcode.mnemonic.to_owned();
 		*offset += 1;
@@ -435,65 +371,93 @@ impl Disassembler {
 		match opcode.mode {
 			Mode::IMM => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" #{}", self.bus.get_u8(*offset)).as_str();
+					code += format!(" #{}", self.bus.borrow().get_u8(*offset)).as_str();
 				} else {
-					code += format!(" #${:02X}", self.bus.get_u8(*offset)).as_str();
+					code += format!(" #${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
-			Mode::ZP0 => {
+			Mode::ZPG => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}", self.bus.get_u8(*offset)).as_str();
+					code += format!(" {}", self.bus.borrow().get_u8(*offset)).as_str();
 				} else {
-					code += format!(" ${:02X}", self.bus.get_u8(*offset)).as_str();
+					code += format!(" ${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
 			Mode::ZPX => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, X", self.bus.get_u8(*offset)).as_str();
+					code += format!(" {}, X", self.bus.borrow().get_u8(*offset)).as_str();
 				} else {
-					code += format!(" ${:02X}, X", self.bus.get_u8(*offset)).as_str();
+					code += format!(" ${:02X}, X", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
 			Mode::ZPY => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, Y", self.bus.get_u8(*offset)).as_str();
+					code += format!(" {}, Y", self.bus.borrow().get_u8(*offset)).as_str();
 				} else {
-					code += format!(" ${:02X}, Y", self.bus.get_u8(*offset)).as_str();
+					code += format!(" ${:02X}, Y", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
 			Mode::IZX => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" ({}, X)", self.bus.get_u8(*offset)).as_str();
+					code += format!(" ({}, X)", self.bus.borrow().get_u8(*offset)).as_str();
 				} else {
-					code += format!(" (${:02X}, X)", self.bus.get_u8(*offset)).as_str();
+					code += format!(" (${:02X}, X)", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
 			Mode::IZY => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" ({}, Y)", self.bus.get_u8(*offset)).as_str();
+					code += format!(" ({}, Y)", self.bus.borrow().get_u8(*offset)).as_str();
 				} else {
-					code += format!(" (${:02X}, Y)", self.bus.get_u8(*offset)).as_str();
+					code += format!(" (${:02X}, Y)", self.bus.borrow().get_u8(*offset)).as_str();
 				}
 				*offset += 1;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
 			Mode::ABS => {
-				let addr = (self.bus.get_u16_le(*offset) + 2) as usize;
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 
-				if let Some(r) = self.rgns.get_mut(&addr) {
+				let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
+
+				if let Some(r) = self.bus.borrow().get_region(addr) {
+					let r = r.borrow();
 					if opbyte == 32 || opbyte == 76 {
-						code += format!(" {}", r.label).as_str();
-						r.add_ref(start);
+						code += format!(" {}", r.get_label()).as_str();
 					}
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-						code += format!(" {}", self.bus.get_u16_le(*offset)).as_str();
+						code += format!(" {}", self.bus.borrow().get_u16_le(*offset)).as_str();
 					} else {
-						code += format!(" ${:04X}", self.bus.get_u16_le(*offset)).as_str();
+						code += format!(" ${:04X}", self.bus.borrow().get_u16_le(*offset)).as_str();
 					}
 				}
 
@@ -501,41 +465,57 @@ impl Disassembler {
 			},
 			Mode::ABX => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, X", self.bus.get_u16_le(*offset)).as_str();
+					code += format!(" {}, X", self.bus.borrow().get_u16_le(*offset)).as_str();
 				} else {
-					code += format!(" ${:04X}, X", self.bus.get_u16_le(*offset)).as_str();
+					code += format!(" ${:04X}, X", self.bus.borrow().get_u16_le(*offset)).as_str();
 				}
 				*offset += 2;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
 			Mode::ABY => {
 				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, Y", self.bus.get_u16_le(*offset)).as_str();
+					code += format!(" {}, Y", self.bus.borrow().get_u16_le(*offset)).as_str();
 				} else {
-					code += format!(" ${:04X}, Y", self.bus.get_u16_le(*offset)).as_str();
+					code += format!(" ${:04X}, Y", self.bus.borrow().get_u16_le(*offset)).as_str();
 				}
 				*offset += 2;
+
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 			},
 			Mode::IND => {
-				let addr = (self.bus.get_u16_le(*offset) + 2) as usize;
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 
-				if let Some(r) = self.rgns.get_mut(&addr) {
-					code += format!(" {}", r.label).as_str();
-					r.add_ref(start);
+				let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
+
+				if let Some(r) = self.bus.borrow().get_region(addr) {
+					let r = r.borrow();
+					code += format!(" {}", r.get_label()).as_str();
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-						code += format!(" ({})", self.bus.get_u16_le(*offset)).as_str();
+						code += format!(" ({})", self.bus.borrow().get_u16_le(*offset)).as_str();
 					} else {
-						code += format!(" (${:04X})", self.bus.get_u16_le(*offset)).as_str();
+						code += format!(" (${:04X})", self.bus.borrow().get_u16_le(*offset)).as_str();
 					}
 				}
 				*offset += 2;
 			},
 			Mode::REL => {
-				let addr = ((*offset as i32) + (self.bus.get_i8(*offset) as i32) + 1) as usize;
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
 
-				if let Some(r) = self.rgns.get_mut(&addr) {
-					code += format!(" {}", r.label).as_str();
-					r.add_ref(start);
+				let addr = ((*offset as i32) + (self.bus.borrow().get_i8(*offset) as i32) + 1) as usize;
+
+				if let Some(r) = self.bus.borrow().get_region(addr) {
+					let r = r.borrow();
+					code += format!(" {}", r.get_label()).as_str();
 				} else {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
 						code += format!(" {}", addr as u16).as_str();
@@ -545,113 +525,41 @@ impl Disassembler {
 				}
 				*offset += 1;
 			},
-			_ => (), // implied address mode
-		}
-
-		if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-			code = code.to_lowercase();
+			_ => { // implied address mode
+				if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+					code = code.to_lowercase();
+				}
+			},
 		}
 
 		self.disasm.insert(start, code);
 	}
 
-	/// Adds a range of disassembled operations
-	pub fn from_range(&mut self, start: usize, end: usize) {
-		let mut offset = start;
-
-		if self.cfg.contains(DisassemblerConfig::AUTO_LABELS) {
-			self.generate_regions(start, end);
-		}
-
-		while offset < end {
-			self.from_operation(&mut offset);
-		}
-	}
-
-	/// Generates and adds labels between the given start and end offsets
-	fn generate_regions(&mut self, start: usize, end: usize) {
-		let mut offset = start;
-
-		while offset < end {
-			let op = self.bus.get_u8(offset) as usize;
-			let mode = OPCODES[op].mode;
-			offset += 1;
-
-			match mode {
-				Mode::REL => {
-					let addr = ((offset as i32) + (self.bus.get_i8(offset) as i32) + 1) as u16;
-					self.rgns.insert(addr as usize, Region::new(RegionType::Label,
-						format!("L_{:04X}", addr).as_str()));
-
-					offset += 1;
-				},
-				Mode::ABS | Mode::IND => {
-					let addr = self.bus.get_u16_le(offset) + 2;
-
-					match op {
-						32 => { // JSR, label is a function
-							self.rgns.insert(addr as usize,
-								Region::new(RegionType::Function, format!("F_{:04X}", addr).as_str()));
-						},
-						76 | 108 => { // JMP
-							self.rgns.insert(addr as usize,
-								Region::new(RegionType::Label, format!("L_{:04X}", addr).as_str()));
-						},
-						_ => (),
-					}
-
-					offset += 2;
-				},
-				_ => (),
-			}
-		}
-
-		self.rgns.sort_keys()
-	}
-
-	/// Returns the code at the given offset, if any
-	pub fn get_code_at_offset(&self, offset: usize) -> Option<&str> {
+	fn get_code_at_offset(&self, offset: usize) -> Option<String> {
 		if let Some(s) = self.disasm.get(&offset) {
-			Some(s.as_str())
+			Some(s.to_string())
 		} else {
 			None
 		}
 	}
 
-	/// Returns the label at the given offset, if any
-	pub fn get_label_at_offset(&self, offset: usize) -> Option<&str> {
-		if let Some(r) = self.rgns.get(&offset) {
-			Some(r.label.as_str())
+	fn get_label_at_offset(&self, offset: usize) -> Option<String> {
+		if let Some(r) = self.bus.borrow().get_region(offset) {
+			let r = r.borrow();
+			Some(r.get_label().to_owned())
 		} else {
 			None
 		}
-	}
-
-	/// Returns a reference to the map of regions
-	#[inline]
-	pub fn get_regions(&self) -> &IndexMap<usize, Region> {
-		&self.rgns
-	}
-
-	/// Initialises the region map with hardcoded vectors
-	fn init_regions() -> IndexMap<usize, Region> {
-		let mut map = IndexMap::new();
-
-		map.insert(IRQ_ADDR, Region::new(RegionType::Data, "IRQ"));
-		map.insert(NMI_ADDR, Region::new(RegionType::Data, "NMI"));
-		map.insert(RESET_ADDR, Region::new(RegionType::Data, "RESET"));
-		map.insert(STACK_ADDR, Region::new(RegionType::Data, "STACK"));
-
-		map
 	}
 }
 
-impl Display for Disassembler {
+impl Display for MOS6500Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		for (o, c) in self.disasm.iter() {
-			if let Some(r) = self.rgns.get(o) {
-				write!(f, "\n\t{}:\t\t; REFS: ", r.label)?;
-				for x in r.refs.iter() {
+			if let Some(r) = self.bus.borrow().get_region(*o) {
+				let r = r.borrow();
+				write!(f, "\n\t{}:\t\t; REFS: ", r.get_label())?;
+				for x in r.get_refs().iter() {
 					write!(f, "{:04X} ", x)?;
 				}
 				writeln!(f, "")?;
@@ -671,7 +579,7 @@ impl Display for Disassembler {
 mod tests {
 	use rgk_processors_core::{
 		Bus,
-		Device
+		Disassembler
 	};
 
 	use super::*;
@@ -685,7 +593,7 @@ mod tests {
 			0xd0,0xf5];
 
 		let mut bus = Rc::new(Bus::new(65536));
-		bus.write(666, &data);
+		self.bus.borrow().write(666, &data);
 		let bus = bus;
 
 		let mut da = Disassembler::new(Rc::clone(&bus), None);
@@ -703,7 +611,7 @@ mod tests {
 			0xd0,0xf5];
 
 		let mut bus = Rc::new(Bus::new(65536));
-		bus.write(666, &data);
+		self.bus.borrow().write(666, &data);
 		let bus = bus;
 
 		let cfg = DisassemblerConfig::DECIMAL | DisassemblerConfig::OFFSETS |
@@ -723,9 +631,9 @@ mod tests {
 			0xd0,0xf5];
 
 		let mut bus = Bus::new(65536);
-		bus.write(0, &data[..]);
+		self.bus.borrow().write(0, &data[..]);
 
-		let cfg = DisassemblerConfig::AUTO_LABELS | DisassemblerConfig::OFFSETS;
+		let cfg = DisassemblerConfig::AUTO_REGIONS | DisassemblerConfig::OFFSETS;
 		let mut da = Disassembler::new(Rc::new(bus), Some(cfg));
 		da.from_range(0, 48);
 
@@ -742,16 +650,16 @@ mod tests {
 		let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
 
 		let mut bus = Bus::new(65536);
-		bus.write(32768, &mario[16..32784]);
+		self.bus.borrow().write(32768, &mario[16..32784]);
 
-		let cfg = DisassemblerConfig::AUTO_LABELS | DisassemblerConfig::OFFSETS;
+		let cfg = DisassemblerConfig::AUTO_REGIONS | DisassemblerConfig::OFFSETS;
 		let mut da = Disassembler::new(Rc::new(bus), Some(cfg));
 		da.from_range(32768, 65530);
 
 		let rm = da.get_regions();
 
 		for (o, r) in rm.iter() {
-			println!("{:04X}: {}", o, r.label);
+			println!("{:04X}: {}", o, r.get_label());
 		}
 	}*/
 
@@ -762,29 +670,10 @@ mod tests {
 		let mut bus = Bus::new(65536);
 		bus.write(32768, &mario[16..32784]);
 
-		let cfg = DisassemblerConfig::AUTO_LABELS | DisassemblerConfig::OFFSETS;
-		let mut da = Disassembler::new(Rc::new(bus), Some(cfg));
+		let cfg = DisassemblerConfig::LOWERCASE | DisassemblerConfig::OFFSETS;
+		let mut da = MOS6500Disassembler::new(Rc::new(RefCell::new(bus)), Some(cfg));
 
-		// https://datacrystal.romhacking.net/wiki/Super_Mario_Bros.:ROM_map
-		/*da.add_region(0x85DF, Region::new(RegionType::Data, "SKY_BG_UNDERWATER"));
-		da.add_region(0x85E0, Region::new(RegionType::Data, "SKY_BG_OVERWORLD"));
-		da.add_region(0x85E1, Region::new(RegionType::Data, "BG_UNDERGROUND"));
-		da.add_region(0x85E2, Region::new(RegionType::Data, "BG_CASTLE"));
-		da.add_region(0x85E3, Region::new(RegionType::Data, "BG_NIGHT"));
-		da.add_region(0x85E4, Region::new(RegionType::Data, "BG_WINTER"));
-		da.add_region(0x85E5, Region::new(RegionType::Data, "BG_WINTER_NIGHT"));
-		da.add_region(0x85E6, Region::new(RegionType::Data, "BG_6_3"));
-		da.add_region(0x8C00, Region::new(RegionType::Data, "CHR_IDX_NORMAL_BLOCK"));
-		da.add_region(0x8C08, Region::new(RegionType::Data, "CHR_IDX_BLOCK_8C08"));
-		da.add_region(0x8C10, Region::new(RegionType::Data, "CHR_IDX_STAR_BLOCK"));
-		da.add_region(0x8C12, Region::new(RegionType::Data, "CHR_IDX_POWERUP_BLOCK"));
-		da.add_region(0x8C16, Region::new(RegionType::Data, "CHR_IDX_BEANSTALK_BLOCK"));
-		da.add_region(0x8C1C, Region::new(RegionType::Data, "CHR_IDX_MULTICOIN_BLOCK"));
-		da.add_region(0x8C20, Region::new(RegionType::Data, "CHR_IDX_BLOCK_8C20"));
-		da.add_region(0x8C9C, Region::new(RegionType::Data, "CHR_IDX_COIN_QBLOCK"));
-		da.add_region(0x8CA0, Region::new(RegionType::Data, "CHR_IDX_POWERUP_QBLOCK"));*/
-
-		da.from_range(32768, 65530);
+		da.analyze_range(32768, 65530);
 
 		println!("{}", da);
 	}
