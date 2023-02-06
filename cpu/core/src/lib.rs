@@ -71,6 +71,9 @@ pub enum RegionType {
 	/// Null-terminated string
 	CString,
 
+	/// Pointer
+	Pointer,
+
 	/// Byte length-prefixed string
 	PString,
 
@@ -79,9 +82,6 @@ pub enum RegionType {
 
 	/// Union/variant
 	Union(Vec<Region>),
-
-	/// Type is indeterminate (ie. pointer to a pointer)
-	Indeterminate,
 }
 
 /// A region of code
@@ -345,6 +345,9 @@ pub trait Device: DeviceBase {
 
 	/// Gets a mutable region on this device
 	fn get_region_mut(&mut self, offset: usize) -> Option<Rc<RefCell<Region>>>;
+
+	/// Gets a vector of a copy of all regions, useful for debugging
+	fn get_all_regions(&self) -> Vec<(usize, Region)>;
 }
 
 /// Single-threaded memory bus
@@ -405,6 +408,10 @@ impl Device for Bus {
 
 	fn get_region_mut(&mut self, offset: usize) -> Option<Rc<RefCell<Region>>> {
 		self.rgns.get_mut(&offset).cloned()
+	}
+
+	fn get_all_regions(&self) -> Vec<(usize, Region)> {
+		self.rgns.iter().map(|(o, r)| (*o, r.borrow().clone())).collect()
 	}
 }
 

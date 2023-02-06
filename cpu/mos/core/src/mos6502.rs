@@ -1228,12 +1228,31 @@ impl DeviceMapBase for MOS6502 {
 	}
 
 	fn generate_regions(&mut self, start: usize, end: usize) {
+		let irq_vec = self.get_u16_le(IRQ_ADDR);
+		let nmi_vec = self.get_u16_le(NMI_ADDR);
+		let res_vec = self.get_u16_le(RES_ADDR);
+
+		let mut irq_r = Region::new(0, RegionType::Function, RegionFlags::default(),
+			format!("FUN_{:04X}", irq_vec).as_str());
+		irq_r.add_ref(IRQ_ADDR);
+
+		let mut nmi_r = Region::new(0, RegionType::Function, RegionFlags::default(),
+			format!("FUN_{:04X}", nmi_vec).as_str());
+		nmi_r.add_ref(NMI_ADDR);
+
+		let mut res_r = Region::new(0, RegionType::Function, RegionFlags::default(),
+			format!("FUN_{:04X}", res_vec).as_str());
+		res_r.add_ref(RES_ADDR);
+
 		self.add_regions(RawRegionMap::from([
 			(0, Region::new(256, RegionType::Section, RegionFlags::default(), "ZERO_PAGE")),
-			(IRQ_ADDR, Region::new(2, RegionType::Unsigned16, RegionFlags::default(), "IRQ")),
-			(NMI_ADDR, Region::new(2, RegionType::Unsigned16, RegionFlags::default(), "NMI")),
-			(RES_ADDR, Region::new(2, RegionType::Unsigned16, RegionFlags::default(), "RES")),
+			(IRQ_ADDR, Region::new(2, RegionType::Pointer, RegionFlags::PTR, "IRQ")),
+			(NMI_ADDR, Region::new(2, RegionType::Pointer, RegionFlags::PTR, "NMI")),
+			(RES_ADDR, Region::new(2, RegionType::Pointer, RegionFlags::PTR, "RES")),
 			(STACK_ADDR, Region::new(256, RegionType::Unsigned8, RegionFlags::ARRAY, "STACK")),
+			(irq_vec as usize, irq_r),
+			(nmi_vec as usize, nmi_r),
+			(res_vec as usize, res_r),
 		]));
 
 		let mut offset = start;
@@ -1350,6 +1369,10 @@ impl Device for MOS6502 {
 
 	fn get_region_mut(&mut self, offset: usize) -> Option<Rc<RefCell<Region>>> {
 		self.bus.borrow_mut().get_region_mut(offset)
+	}
+
+	fn get_all_regions(&self) -> Vec<(usize, Region)> {
+		self.bus.borrow().get_all_regions()
 	}
 }
 

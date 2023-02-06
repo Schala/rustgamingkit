@@ -362,6 +362,10 @@ impl Disassembler for MOS6502Disassembler {
 		if let Some(r) = self.bus.borrow().get_region(*offset) {
 			let r = r.borrow();
 
+			if r.is_ptr() {
+				code.push('*');
+			}
+
 			match r.get_type() {
 				&RegionType::Signed8 => {
 					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -417,6 +421,21 @@ impl Disassembler for MOS6502Disassembler {
 						code = code.to_lowercase();
 					}
 
+					do_break = false;
+				},
+				&RegionType::Pointer => {
+					if let Some(p) = self.bus.borrow().get_region(self.bus.borrow().get_u16_le(*offset) as usize) {
+						let p = p.borrow();
+						code += format!("\t{}", p.get_label()).as_str();
+					} else {
+						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+							code += format!("\t{}", self.bus.borrow().get_u16_le(*offset)).as_str();
+						} else {
+							code += format!("\t${:04X}", self.bus.borrow().get_u16_le(*offset)).as_str();
+						}
+					}
+
+					*offset += 2;
 					do_break = false;
 				},
 				_ => (),
@@ -512,11 +531,11 @@ impl Disassembler for MOS6502Disassembler {
 					*offset += 1;
 				},
 				Mode::ABS => {
-					let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
+					if opbyte == 32 || opbyte == 76 {
+						let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
 
-					if let Some(r) = self.bus.borrow().get_region(addr) {
-						let r = r.borrow();
-						if opbyte == 32 || opbyte == 76 {
+						if let Some(r) = self.bus.borrow().get_region(addr) {
+							let r = r.borrow();
 							code += format!(" {}", r.get_label()).as_str();
 						}
 					} else {
@@ -599,9 +618,9 @@ impl Disassembler for MOS6502Disassembler {
 				},
 				_ => (),
 			}
-
-			self.disasm.insert(start, code);
 		}
+
+		self.disasm.insert(start, code);
 	}
 
 	fn get_code_at_offset(&self, offset: usize) -> Option<String> {
@@ -624,6 +643,8 @@ impl Disassembler for MOS6502Disassembler {
 
 impl Display for MOS6502Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		//dbg!(&self.disasm);
+		dbg!(self.bus.borrow().get_all_regions());
 		for (o, c) in self.disasm.iter() {
 			if let Some(r) = self.bus.borrow().get_region(*o) {
 				let r = r.borrow();
