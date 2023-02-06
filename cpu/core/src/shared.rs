@@ -10,9 +10,9 @@ use crate::{
 	Region
 };
 
-pub type AtomicRegionMap = HashMap<usize, Arc<Mutex<Region>>>;
+pub type SharedRegionMap = HashMap<usize, Arc<Mutex<Region>>>;
 
 /// Common atomic device operations
-pub trait AtomicDeviceMap: DeviceMapBase {
+pub trait SharedDeviceMap: DeviceMapBase {
 	fn get_region(&self, offset: usize) -> Option<Arc<Mutex<Region>>>;
 }

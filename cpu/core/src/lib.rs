@@ -1,3 +1,5 @@
+use bitflags::bitflags;
+
 use std::{
 	cell::RefCell,
 	collections::HashMap,
@@ -9,55 +11,83 @@ use std::{
 	rc::Rc
 };
 
-#[cfg(feature = "atomic")]
-pub mod atomic;
+#[cfg(feature = "shared")]
+pub mod shared;
+
+bitflags! {
+	#[derive(Default)]
+	pub struct RegionFlags: u8 {
+		/// Region is a pointer
+		const PTR = 1;
+
+		/// Region is an array
+		const ARRAY = 2;
+	}
+}
 
 /// Region type
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum RegionType {
-	/// Region is labelled
+	/// Simple label
 	#[default]
 	Label,
 
-	/// Region is a function
+	/// Function
 	Function,
 
-	/// Region is a general section of memory
+	/// General section of memory
 	Section,
 
-	// --- data types
-
-	/// Region is a fixed array of bytes
-	ByteArray,
-
-	WordArray,
-
-	Text,
-
-	/// Region is an array of bytes and should not be interpreted as an operation
-	Bytes,
-
+	/// Signed byte
 	Signed8,
+
+	/// Unsigned byte
 	Unsigned8,
+
+	/// Signed word
 	Signed16,
+
+	/// Unsigned word
 	Unsigned16,
+
+	/// Signed 32-bit integer
 	Signed32,
+
+	/// Unsigned 32-bit integer
 	Unsigned32,
+
+	/// Single-precision floating point
 	Float32,
+
+	/// Signed 64-bit integer
 	Signed64,
+
+	/// Unsigned 64-bit integer
 	Unsigned64,
+
+	/// Double-precision floating point
 	Float64,
 
-	/// Region is a data structure (struct, class, record, object, etc.)
+	/// Null-terminated string
+	CString,
+
+	/// Byte length-prefixed string
+	PString,
+
+	/// Structure (struct, class, record, object, etc.)
 	Structure(RawRegionMap),
 
-	/// Region is a union/variant
+	/// Union/variant
 	Union(Vec<Region>),
+
+	/// Type is indeterminate (ie. pointer to a pointer)
+	Indeterminate,
 }
 
 /// A region of code
 #[derive(Clone, Debug, PartialEq)]
 pub struct Region {
+	flags: RegionFlags,
 	kind: RegionType,
 	label: String,
 	refs: Vec<usize>,
@@ -69,8 +99,9 @@ pub type RegionMap = HashMap<usize, Rc<RefCell<Region>>>;
 
 impl Region {
 	/// Creates a new memory region with the specified type, size and label
-	pub fn new(size: usize, kind: RegionType, label: &str) -> Region {
+	pub fn new(size: usize, kind: RegionType, flags: RegionFlags, label: &str) -> Region {
 		Region {
+			flags,
 			size,
 			kind,
 			label: label.to_owned(),
@@ -81,6 +112,15 @@ impl Region {
 	/// Adds an address that references the region
 	pub fn add_ref(&mut self, addr: usize) {
 		self.refs.push(addr);
+	}
+
+	/// Gets the size of the region if the type is an array, otherwise the singular size is given
+	pub fn get_array_size(&self) -> usize {
+		if self.is_array() {
+			self.size / self.get_size()
+		} else {
+			self.get_size()
+		}
 	}
 
 	/// Gets the region label
@@ -125,6 +165,16 @@ impl Region {
 	/// Gets the region type
 	pub fn get_type(&self) -> &RegionType {
 		&self.kind
+	}
+
+	/// Is the region flagged as an array?
+	pub const fn is_array(&self) -> bool {
+		self.flags.contains(RegionFlags::ARRAY)
+	}
+
+	/// Is the region flagged as a pointer?
+	pub const fn is_ptr(&self) -> bool {
+		self.flags.contains(RegionFlags::PTR)
 	}
 
 	/// Changes a label to a function
@@ -172,10 +222,10 @@ pub trait DeviceMap: DeviceMapBase {
 
 /// Common disassembler operations
 pub trait Disassembler {
-	/// Analyses one disassembled operation
+	/// Analyses one region
 	fn analyze(&mut self, offset: &mut usize);
 
-	/// Analyses a range of disassembled operations
+	/// Analyses a range of binary
 	fn analyze_range(&mut self, start: usize, end: usize) {
 		let mut offset = start;
 
@@ -212,6 +262,16 @@ pub trait DeviceBase {
 	/// Writes a single byte to the address on the device
 	fn put_u8(&mut self, address: usize, data: u8) {
 		self.write(address, data.to_ne_bytes().as_slice());
+	}
+
+	/// Retrieves a little endian 16-bit signed value from the address on the device
+	fn get_i16_le(&self, address: usize) -> i16 {
+		i16::from_le_bytes(self.read(address, 2).try_into().unwrap())
+	}
+
+	/// Retrieves a big endian 16-bit signed value from the address on the device
+	fn get_i16_be(&self, address: usize) -> i16 {
+		i16::from_be_bytes(self.read(address, 2).try_into().unwrap())
 	}
 
 	/// Retrieves a little endian 16-bit unsigned value from the address on the device

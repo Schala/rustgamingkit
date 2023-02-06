@@ -11,10 +11,7 @@ use std::{
 	rc::Rc
 };
 
-use crate::{
-	Mode,
-	MOS6502
-};
+use crate::Mode;
 
 use rgk_processors_core::{
 	Bus,
@@ -356,142 +353,255 @@ impl MOS6502Disassembler {
 }
 
 impl Disassembler for MOS6502Disassembler {
+	#[allow(unused_assignments)] // Rust will bitch about `code` assignment in conditionals
 	fn analyze(&mut self, offset: &mut usize) {
-		// If the region isn't a label or function, do nothing
+		let start = *offset;
+		let mut code = "".to_owned();
+		let mut do_break = true;
+
 		if let Some(r) = self.bus.borrow().get_region(*offset) {
 			let r = r.borrow();
-			if r.get_type() != &RegionType::Label && r.get_type() != &RegionType::Function {
-				return;
+
+			match r.get_type() {
+				&RegionType::Signed8 => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!("i8\t{}", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!("i8\t${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
+					}
+					*offset += 1;
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					do_break = false;
+				},
+				&RegionType::Unsigned8 => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!("u8\t{}", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!("u8\t${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
+					}
+					*offset += 1;
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					do_break = false;
+				},
+				&RegionType::Signed16 => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!("i16\t{}", self.bus.borrow().get_i16_le(*offset)).as_str();
+					} else {
+						code += format!("i16\t${:04X}", self.bus.borrow().get_i16_le(*offset)).as_str();
+					}
+					*offset += 2;
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					do_break = false;
+				},
+				&RegionType::Unsigned16 => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!("u16\t{}", self.bus.borrow().get_u16_le(*offset)).as_str();
+					} else {
+						code += format!("u16\t${:04X}", self.bus.borrow().get_u16_le(*offset)).as_str();
+					}
+					*offset += 2;
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					do_break = false;
+				},
+				_ => (),
 			}
 		}
 
-		let start = *offset;
-		let opbyte = self.bus.borrow().get_u8(*offset) as usize;
-		let opcode = &OPCODES[opbyte];
-		let mut code = opcode.mnemonic.to_owned();
-		*offset += 1;
+		if do_break { // operation
+			let opbyte = self.bus.borrow().get_u8(*offset) as usize;
+			let opcode = &OPCODES[opbyte];
+			code = opcode.mnemonic.to_owned();
 
-		match opcode.mode {
-			Mode::IMM => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" #{}", self.bus.borrow().get_u8(*offset)).as_str();
-				} else {
-					code += format!(" #${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
-				}
-				*offset += 1;
-			},
-			Mode::ZPG => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}", self.bus.borrow().get_u8(*offset)).as_str();
-				} else {
-					code += format!(" ${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
-				}
-				*offset += 1;
-			},
-			Mode::ZPX => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, X", self.bus.borrow().get_u8(*offset)).as_str();
-				} else {
-					code += format!(" ${:02X}, X", self.bus.borrow().get_u8(*offset)).as_str();
-				}
-				*offset += 1;
-			},
-			Mode::ZPY => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, Y", self.bus.borrow().get_u8(*offset)).as_str();
-				} else {
-					code += format!(" ${:02X}, Y", self.bus.borrow().get_u8(*offset)).as_str();
-				}
-				*offset += 1;
-			},
-			Mode::IZX => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" ({}, X)", self.bus.borrow().get_u8(*offset)).as_str();
-				} else {
-					code += format!(" (${:02X}, X)", self.bus.borrow().get_u8(*offset)).as_str();
-				}
-				*offset += 1;
-			},
-			Mode::IZY => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" ({}, Y)", self.bus.borrow().get_u8(*offset)).as_str();
-				} else {
-					code += format!(" (${:02X}, Y)", self.bus.borrow().get_u8(*offset)).as_str();
-				}
-				*offset += 1;
-			},
-			Mode::ABS => {
-				let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
+			if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+				code = code.to_lowercase();
+			}
 
-				if let Some(r) = self.bus.borrow().get_region(addr) {
-					let r = r.borrow();
-					if opbyte == 32 || opbyte == 76 {
+			*offset += 1;
+
+			match opcode.mode {
+				Mode::IMM => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" #{}", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!(" #${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
+						if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+							code = code.to_lowercase();
+						}
+					}
+
+					*offset += 1;
+				},
+				Mode::ZPG => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" {}", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!(" ${:02X}", self.bus.borrow().get_u8(*offset)).as_str();
+						if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+							code = code.to_lowercase();
+						}
+					}
+
+					*offset += 1;
+				},
+				Mode::ZPX => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" {}, X", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!(" ${:02X}, X", self.bus.borrow().get_u8(*offset)).as_str();
+					}
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					*offset += 1;
+				},
+				Mode::ZPY => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" {}, Y", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!(" ${:02X}, Y", self.bus.borrow().get_u8(*offset)).as_str();
+					}
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					*offset += 1;
+				},
+				Mode::IZX => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" ({}, X)", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!(" (${:02X}, X)", self.bus.borrow().get_u8(*offset)).as_str();
+					}
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					*offset += 1;
+				},
+				Mode::IZY => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" ({}, Y)", self.bus.borrow().get_u8(*offset)).as_str();
+					} else {
+						code += format!(" (${:02X}, Y)", self.bus.borrow().get_u8(*offset)).as_str();
+					}
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					*offset += 1;
+				},
+				Mode::ABS => {
+					let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
+
+					if let Some(r) = self.bus.borrow().get_region(addr) {
+						let r = r.borrow();
+						if opbyte == 32 || opbyte == 76 {
+							code += format!(" {}", r.get_label()).as_str();
+						}
+					} else {
+						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+							code += format!(" {}", self.bus.borrow().get_u16_le(*offset)).as_str();
+						} else {
+							code += format!(" ${:04X}", self.bus.borrow().get_u16_le(*offset)).as_str();
+
+							if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+								code = code.to_lowercase();
+							}
+						}
+					}
+
+					*offset += 2;
+				},
+				Mode::ABX => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" {}, X", self.bus.borrow().get_u16_le(*offset)).as_str();
+					} else {
+						code += format!(" ${:04X}, X", self.bus.borrow().get_u16_le(*offset)).as_str();
+					}
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					*offset += 2;
+				},
+				Mode::ABY => {
+					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+						code += format!(" {}, Y", self.bus.borrow().get_u16_le(*offset)).as_str();
+					} else {
+						code += format!(" ${:04X}, Y", self.bus.borrow().get_u16_le(*offset)).as_str();
+					}
+
+					if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+						code = code.to_lowercase();
+					}
+
+					*offset += 2;
+				},
+				Mode::IND => {
+					let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
+
+					if let Some(r) = self.bus.borrow().get_region(addr) {
+						let r = r.borrow();
 						code += format!(" {}", r.get_label()).as_str();
-					}
-				} else {
-					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-						code += format!(" {}", self.bus.borrow().get_u16_le(*offset)).as_str();
 					} else {
-						code += format!(" ${:04X}", self.bus.borrow().get_u16_le(*offset)).as_str();
+						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+							code += format!(" ({})", self.bus.borrow().get_u16_le(*offset)).as_str();
+						} else {
+							code += format!(" (${:04X})", self.bus.borrow().get_u16_le(*offset)).as_str();
+
+							if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+								code = code.to_lowercase();
+							}
+						}
 					}
-				}
+					*offset += 2;
+				},
+				Mode::REL => {
+					let addr = ((*offset as i32) + (self.bus.borrow().get_i8(*offset) as i32) + 1) as usize;
 
-				*offset += 2;
-			},
-			Mode::ABX => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, X", self.bus.borrow().get_u16_le(*offset)).as_str();
-				} else {
-					code += format!(" ${:04X}, X", self.bus.borrow().get_u16_le(*offset)).as_str();
-				}
-				*offset += 2;
-			},
-			Mode::ABY => {
-				if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-					code += format!(" {}, Y", self.bus.borrow().get_u16_le(*offset)).as_str();
-				} else {
-					code += format!(" ${:04X}, Y", self.bus.borrow().get_u16_le(*offset)).as_str();
-				}
-				*offset += 2;
-			},
-			Mode::IND => {
-				let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
-
-				if let Some(r) = self.bus.borrow().get_region(addr) {
-					let r = r.borrow();
-					code += format!(" {}", r.get_label()).as_str();
-				} else {
-					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-						code += format!(" ({})", self.bus.borrow().get_u16_le(*offset)).as_str();
+					if let Some(r) = self.bus.borrow().get_region(addr) {
+						let r = r.borrow();
+						code += format!(" {}", r.get_label()).as_str();
 					} else {
-						code += format!(" (${:04X})", self.bus.borrow().get_u16_le(*offset)).as_str();
-					}
-				}
-				*offset += 2;
-			},
-			Mode::REL => {
-				let addr = ((*offset as i32) + (self.bus.borrow().get_i8(*offset) as i32) + 1) as usize;
+						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
+							code += format!(" {}", addr as u16).as_str();
+						} else {
+							code += format!(" ${:04X}", addr as u16).as_str();
 
-				if let Some(r) = self.bus.borrow().get_region(addr) {
-					let r = r.borrow();
-					code += format!(" {}", r.get_label()).as_str();
-				} else {
-					if self.cfg.contains(DisassemblerConfig::DECIMAL) {
-						code += format!(" {}", addr as u16).as_str();
-					} else {
-						code += format!(" ${:04X}", addr as u16).as_str();
+							if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
+								code = code.to_lowercase();
+							}
+						}
 					}
-				}
-				*offset += 1;
-			},
-			_ => (),
+					*offset += 1;
+				},
+				_ => (),
+			}
+
+			self.disasm.insert(start, code);
 		}
-
-		if self.cfg.contains(DisassemblerConfig::LOWERCASE) {
-			code = code.to_lowercase();
-		}
-
-		self.disasm.insert(start, code);
 	}
 
 	fn get_code_at_offset(&self, offset: usize) -> Option<String> {
@@ -542,6 +652,7 @@ mod tests {
 	};
 
 	use super::*;
+	use crate::MOS6502;
 
 	/*#[test]
 	fn test_disassemble() {
@@ -633,7 +744,7 @@ mod tests {
 		let cpu = MOS6502::new(Rc::new(RefCell::new(bus)));
 		let mut da = MOS6502Disassembler::new(cpu.get_bus(), Some(cfg));
 
-		da.analyze_range(32768, 65530);
+		da.analyze_range(32768, 65536);
 
 		println!("{}", da);
 	}

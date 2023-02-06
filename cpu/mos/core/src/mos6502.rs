@@ -19,6 +19,7 @@ use rgk_processors_core::{
 	Processor,
 	RawRegionMap,
 	Region,
+	RegionFlags,
 	RegionType
 };
 
@@ -1228,10 +1229,11 @@ impl DeviceMapBase for MOS6502 {
 
 	fn generate_regions(&mut self, start: usize, end: usize) {
 		self.add_regions(RawRegionMap::from([
-			(IRQ_ADDR, Region::new(2, RegionType::Unsigned16, "IRQ")),
-			(NMI_ADDR, Region::new(2, RegionType::Unsigned16, "NMI")),
-			(RES_ADDR, Region::new(2, RegionType::Unsigned16, "RES")),
-			(STACK_ADDR, Region::new(256, RegionType::ByteArray, "STACK")),
+			(0, Region::new(256, RegionType::Section, RegionFlags::default(), "ZERO_PAGE")),
+			(IRQ_ADDR, Region::new(2, RegionType::Unsigned16, RegionFlags::default(), "IRQ")),
+			(NMI_ADDR, Region::new(2, RegionType::Unsigned16, RegionFlags::default(), "NMI")),
+			(RES_ADDR, Region::new(2, RegionType::Unsigned16, RegionFlags::default(), "RES")),
+			(STACK_ADDR, Region::new(256, RegionType::Unsigned8, RegionFlags::ARRAY, "STACK")),
 		]));
 
 		let mut offset = start;
@@ -1251,7 +1253,8 @@ impl DeviceMapBase for MOS6502 {
 							r.add_ref(offset - 1);
 						}
 					} else {
-						let mut r = Region::new(0, RegionType::Label, format!("L_{:04X}", addr).as_str());
+						let mut r = Region::new(0, RegionType::Label,  RegionFlags::default(),
+							format!("LAB_{:04X}", addr).as_str());
 						r.add_ref(offset - 1);
 						self.add_region(addr as usize, r);
 					}
@@ -1266,11 +1269,12 @@ impl DeviceMapBase for MOS6502 {
 						if let Some(r) = self.get_region_mut(addr as usize) {
 							let mut r = r.borrow_mut();
 
-							r.label_to_fn(Some(format!("F_{:04X}", addr & 65535).as_str()));
+							r.label_to_fn(Some(format!("FUN_{:04X}", addr & 65535).as_str()));
 							r.add_ref(offset - 1);
 						}
 					} else {
-						let mut r = Region::new(0, RegionType::Function, format!("F_{:04X}", addr & 65535).as_str());
+						let mut r = Region::new(0, RegionType::Function,  RegionFlags::default(),
+							format!("FUN_{:04X}", addr & 65535).as_str());
 						r.add_ref(offset - 1);
 						self.add_region(addr, r);
 					}
@@ -1287,7 +1291,8 @@ impl DeviceMapBase for MOS6502 {
 							r.add_ref(offset - 1);
 						}
 					} else {
-						let mut r = Region::new(0, RegionType::Label, format!("L_{:04X}", addr).as_str());
+						let mut r = Region::new(0, RegionType::Label, RegionFlags::default(),
+							format!("LAB_{:04X}", addr).as_str());
 						r.add_ref(offset - 1);
 						self.add_region(addr as usize, r);
 					}
