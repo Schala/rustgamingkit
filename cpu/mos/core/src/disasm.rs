@@ -532,7 +532,11 @@ impl Disassembler for MOS6502Disassembler {
 				},
 				Mode::ABS => {
 					if opbyte == 32 || opbyte == 76 {
-						let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
+						let addr = self.bus.borrow().get_u16_le(*offset) as usize;
+
+						if *offset == 0x802c {
+							dbg!(addr);
+						}
 
 						if let Some(r) = self.bus.borrow().get_region(addr) {
 							let r = r.borrow();
@@ -644,7 +648,7 @@ impl Disassembler for MOS6502Disassembler {
 impl Display for MOS6502Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		//dbg!(&self.disasm);
-		dbg!(self.bus.borrow().get_all_regions());
+		//dbg!(self.bus.borrow().get_all_regions());
 		for (o, c) in self.disasm.iter() {
 			if let Some(r) = self.bus.borrow().get_region(*o) {
 				let r = r.borrow();

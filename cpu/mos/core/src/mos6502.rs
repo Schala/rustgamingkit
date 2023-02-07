@@ -15,7 +15,6 @@ use rgk_processors_core::{
 	Device,
 	DeviceBase,
 	DeviceMap,
-	DeviceMapBase,
 	Processor,
 	RawRegionMap,
 	Region,
@@ -1222,7 +1221,7 @@ impl MOS6502 {
 	}
 }
 
-impl DeviceMapBase for MOS6502 {
+impl DeviceMap for MOS6502 {
 	fn add_region(&mut self, address: usize, region: Region) {
 		self.bus.borrow_mut().add_region(address, region);
 	}
@@ -1287,7 +1286,6 @@ impl DeviceMapBase for MOS6502 {
 					if self.region_exists(addr) {
 						if let Some(r) = self.get_region_mut(addr as usize) {
 							let mut r = r.borrow_mut();
-
 							r.label_to_fn(Some(format!("FUN_{:04X}", addr & 65535).as_str()));
 							r.add_ref(offset - 1);
 						}
@@ -1338,14 +1336,17 @@ impl DeviceMapBase for MOS6502 {
 				_ => (),
 			}
 		}
+
+		//self.sort_regions();
 	}
 
 	fn region_exists(&self, offset: usize) -> bool {
 		self.bus.borrow().region_exists(offset)
 	}
-}
 
-impl DeviceMap for MOS6502 {
+	fn sort_regions(&mut self) {
+		self.bus.borrow_mut().sort_regions();
+	}
 }
 
 impl DeviceBase for MOS6502 {

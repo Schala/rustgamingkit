@@ -2,7 +2,7 @@
 edition = "2021"
 name = "rgk-processors-mos"
 description = "MOS CPU series emulation"
-version = "2023.2.4"
+version = "2023.2.6"
 
 [features]
 default = ["mos6502", "disassembler"]

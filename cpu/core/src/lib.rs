@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use indexmap::IndexMap;
 
 use std::{
 	cell::RefCell,
@@ -95,7 +96,7 @@ pub struct Region {
 }
 
 pub type RawRegionMap = HashMap<usize, Region>;
-pub type RegionMap = HashMap<usize, Rc<RefCell<Region>>>;
+pub type RegionMap = IndexMap<usize, Rc<RefCell<Region>>>;
 
 impl Region {
 	/// Creates a new memory region with the specified type, size and label
@@ -199,7 +200,7 @@ pub trait Processor {
 }
 
 /// Common memory region mapping operations
-pub trait DeviceMapBase {
+pub trait DeviceMap {
 	/// Registers a region in memory
 	fn add_region(&mut self, address: usize, region: Region);
 
@@ -208,10 +209,10 @@ pub trait DeviceMapBase {
 
 	/// Does the region exist at the specified offset?
 	fn region_exists(&self, offset: usize) -> bool;
-}
 
-/// Single-threaded region mapping
-pub trait DeviceMap: DeviceMapBase {
+	/// Sorts region offsets in order
+	fn sort_regions(&mut self);
+
 	/// Registers multiple regions in memory
 	fn add_regions(&mut self, mut map: RawRegionMap) {
 		for (a, r) in map.drain() {
@@ -366,7 +367,7 @@ impl Bus {
 	}
 }
 
-impl DeviceMapBase for Bus {
+impl DeviceMap for Bus {
 	fn add_region(&mut self, address: usize, region: Region) {
 		if !self.region_exists(address) {
 			self.rgns.insert(address, Rc::new(RefCell::new(region)));
@@ -380,9 +381,10 @@ impl DeviceMapBase for Bus {
 	fn region_exists(&self, offset: usize) -> bool {
 		self.rgns.contains_key(&offset)
 	}
-}
 
-impl DeviceMap for Bus {
+	fn sort_regions(&mut self) {
+		self.rgns.sort_keys();
+	}
 }
 
 impl DeviceBase for Bus {
