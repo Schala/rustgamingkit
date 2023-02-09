@@ -354,7 +354,7 @@ impl MOS6502Disassembler {
 
 impl Disassembler for MOS6502Disassembler {
 	#[allow(unused_assignments)] // Rust will bitch about `code` assignment in conditionals
-	fn analyze(&mut self, offset: &mut usize) {
+	fn analyze(&mut self, offset: &mut usize) -> (usize, String) {
 		let start = *offset;
 		let mut code = "".to_owned();
 		let mut do_break = true;
@@ -534,10 +534,6 @@ impl Disassembler for MOS6502Disassembler {
 					if opbyte == 32 || opbyte == 76 {
 						let addr = self.bus.borrow().get_u16_le(*offset) as usize;
 
-						if *offset == 0x802c {
-							dbg!(addr);
-						}
-
 						if let Some(r) = self.bus.borrow().get_region(addr) {
 							let r = r.borrow();
 							code += format!(" {}", r.get_label()).as_str();
@@ -603,6 +599,7 @@ impl Disassembler for MOS6502Disassembler {
 				},
 				Mode::REL => {
 					let addr = ((*offset as i32) + (self.bus.borrow().get_i8(*offset) as i32) + 1) as usize;
+					dbg!(addr);
 
 					if let Some(r) = self.bus.borrow().get_region(addr) {
 						let r = r.borrow();
@@ -624,7 +621,7 @@ impl Disassembler for MOS6502Disassembler {
 			}
 		}
 
-		self.disasm.insert(start, code);
+		(start, code)
 	}
 
 	fn get_code_at_offset(&self, offset: usize) -> Option<String> {
@@ -758,7 +755,7 @@ mod tests {
 		}
 	}*/
 
-	#[test]
+	/*#[test]
 	fn test_disassemble_nes_rom() {
 		let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
 
@@ -772,5 +769,5 @@ mod tests {
 		da.analyze_range(32768, 65536);
 
 		println!("{}", da);
-	}
+	}*/
 }

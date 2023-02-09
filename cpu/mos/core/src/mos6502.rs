@@ -15,12 +15,16 @@ use rgk_processors_core::{
 	Device,
 	DeviceBase,
 	DeviceMap,
+	Disassembler,
+	hexdump,
 	Processor,
 	RawRegionMap,
 	Region,
 	RegionFlags,
 	RegionType
 };
+
+use crate::MOS6502Disassembler;
 
 /// Offset of program stack
 const STACK_ADDR: usize = 256;
@@ -251,8 +255,8 @@ pub struct MOS6502 {
 impl MOS6502 {
 	/// Initialises a new 6502, given a bus pointer
 	pub fn new(bus: Rc<RefCell<Bus>>) -> MOS6502 {
-		let mut cpu = MOS6502 {
-			bus,
+		let cpu = MOS6502 {
+			bus: Rc::clone(&bus),
 			regs: Registers {
 				a: 0,
 				p: Status::default(),
@@ -271,7 +275,7 @@ impl MOS6502 {
 			},
 		};
 
-		cpu.generate_regions(0, 65536);
+		//cpu.generate_regions(0, 65536);
 
 		cpu
 	}
@@ -283,7 +287,8 @@ impl MOS6502 {
 
 	pub fn branch(&mut self) {
 		self.add_cycles(1);
-		self.set_abs_addr(self.get_counter() + self.get_rel_addr());
+		let new_addr = ((self.get_counter() as isize) + (self.get_rel_addr() as isize)) & 65535;
+		self.set_abs_addr(new_addr as usize);
 
 		// need an additional cycle if different page
 		if self.get_abs_hi() != (self.get_counter() & 0xFF00) {
@@ -580,6 +585,12 @@ impl MOS6502 {
 	pub fn stack_write(&mut self, data: u8) {
 		self.write(STACK_ADDR + self.get_sp(), &[data]);
 		self.regs.s -= 1;
+	}
+
+	/// Returns a string of the stackdump
+	pub fn stackdump(&self) -> String {
+		let dump = self.read(STACK_ADDR, 256);
+		hexdump(&dump[..], 2)
 	}
 
 	/// Writes an address to stack
@@ -1221,6 +1232,13 @@ impl MOS6502 {
 	}
 }
 
+impl Display for MOS6502 {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		writeln!(f, "{}", &self.regs);
+		writeln!(f, "{}", &self.cache)
+	}
+}
+
 impl DeviceMap for MOS6502 {
 	fn add_region(&mut self, address: usize, region: Region) {
 		self.bus.borrow_mut().add_region(address, region);
@@ -1384,7 +1402,7 @@ impl Processor for MOS6502 {
 			self.set_flag(Status::U, true);
 
 			// get and increment the counter
-			self.cache.opcode = self.get_u8(self.get_counter().into()).into();
+			self.cache.opcode = self.get_u8(self.get_counter()).into();
 			self.incr();
 
 			match self.get_opcode() {
@@ -2680,5 +2698,61 @@ impl Processor for MOS6502 {
 
 	fn get_ptr_size(&self) -> usize {
 		2
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	use crate::{
+		DisassemblerConfig,
+		MOS6502Disassembler
+	};
+
+	use std::io::stdin;
+
+	#[test]
+	fn test_exec() {
+		//let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
+
+		let hundred_doors = vec![0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
+			0x01,0xc0,0x65,0xb0,0x12,0x98,0xc9,0x65,0xb0,0x0a,0xaa,0xfe,0x00,0x02,0x84,0x01,0x65,
+			0x01,0x90,0xf2,0xc8,0xd0,0xea,0xa2,0x64,0xbd,0x00,0x02,0x29,0x01,0x9d,0x00,0x02,0xca,
+			0xd0,0xf5];
+
+		let mut bus = Bus::new(65536);
+		//bus.write(32768, &mario[16..32784]);
+		bus.write(32768, &hundred_doors[..]);
+
+		let mut cpu = MOS6502::new(Rc::new(RefCell::new(bus)));
+		let cfg = DisassemblerConfig::LOWERCASE | DisassemblerConfig::OFFSETS;
+		let mut da = MOS6502Disassembler::new(cpu.get_bus(), Some(cfg));
+
+		let mut input = String::new();
+		let mut offs = 0;
+		cpu.set_counter(32768);
+		while let Ok(_) = stdin().read_line(&mut input) {
+			match input.chars().nth(0).unwrap() {
+				's' | 'S' => println!("{}", cpu.stackdump()),
+				_ => {
+					loop {
+						cpu.clock();
+						if cpu.get_cycles() == 0 {
+							offs = cpu.get_counter();
+							//dbg!(offs);
+							let (_, code) = da.analyze(&mut offs);
+							println!("{}", &cpu);
+							println!("{code}");
+							break;
+						}
+					}
+				},
+			}
+
+			input.clear();
+		}
+
+		println!("stopped");
 	}
 }

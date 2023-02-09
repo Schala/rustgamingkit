@@ -224,7 +224,7 @@ pub trait DeviceMap {
 /// Common disassembler operations
 pub trait Disassembler {
 	/// Analyses one region
-	fn analyze(&mut self, offset: &mut usize);
+	fn analyze(&mut self, offset: &mut usize) -> (usize, String);
 
 	/// Analyses a range of binary
 	fn analyze_range(&mut self, start: usize, end: usize) {
@@ -258,6 +258,13 @@ pub trait DeviceBase {
 	/// Retrieves a single unsigned byte from the address on the device
 	fn get_u8(&self, address: usize) -> u8 {
 		u8::from_ne_bytes(self.read(address, 1).try_into().unwrap())
+		/*match self.read(address, 1).try_into() {
+			Ok(b) => u8::from_ne_bytes(b),
+			Err(e) => {
+				dbg!(e.kind());
+				panic!("bhup");
+			},
+		}*/
 	}
 
 	/// Writes a single byte to the address on the device
