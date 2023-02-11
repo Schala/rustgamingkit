@@ -11,13 +11,18 @@ use std::{
 	rc::Rc
 };
 
-use crate::Mode;
+use crate::{
+	Mode,
+	MOS6502,
+	Status
+};
 
 use rgk_processors_core::{
 	Bus,
 	Device,
 	DeviceBase,
 	Disassembler,
+	Processor,
 	RegionType
 };
 
@@ -353,6 +358,8 @@ impl MOS6502Disassembler {
 }
 
 impl Disassembler for MOS6502Disassembler {
+	type ProcDev = MOS6502;
+
 	#[allow(unused_assignments)] // Rust will bitch about `code` assignment in conditionals
 	fn analyze(&mut self, offset: &mut usize) -> (usize, String) {
 		let start = *offset;
@@ -599,7 +606,6 @@ impl Disassembler for MOS6502Disassembler {
 				},
 				Mode::REL => {
 					let addr = ((*offset as i32) + (self.bus.borrow().get_i8(*offset) as i32) + 1) as usize;
-					dbg!(addr);
 
 					if let Some(r) = self.bus.borrow().get_region(addr) {
 						let r = r.borrow();
@@ -640,12 +646,27 @@ impl Disassembler for MOS6502Disassembler {
 			None
 		}
 	}
+
+	fn run(&mut self, dev: &mut Self::ProcDev) -> (usize, String) {
+		let mut offset = dev.get_counter();
+
+		loop {
+			dev.clock();
+
+			if dev.get_cycles() == 0 {
+				let (offs, code) = self.analyze(&mut offset);
+				if !self.disasm.contains_key(&offs) {
+					self.disasm.insert(offs, code.clone());
+				}
+
+				return (offs, code);
+			}
+		}
+	}
 }
 
 impl Display for MOS6502Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		//dbg!(&self.disasm);
-		//dbg!(self.bus.borrow().get_all_regions());
 		for (o, c) in self.disasm.iter() {
 			if let Some(r) = self.bus.borrow().get_region(*o) {
 				let r = r.borrow();
@@ -674,7 +695,6 @@ mod tests {
 	};
 
 	use super::*;
-	use crate::MOS6502;
 
 	/*#[test]
 	fn test_disassemble() {

@@ -195,8 +195,14 @@ pub trait Processor {
 	/// Execute one clock cycle
 	fn clock(&mut self);
 
+	/// Gets a pointer from the specified offset
+	fn get_ptr(&self, offset: usize) -> usize;
+
 	/// Gets the pointer size of the processor
 	fn get_ptr_size(&self) -> usize;
+
+	/// Resets the processor state
+	fn reset(&mut self);
 }
 
 /// Common memory region mapping operations
@@ -223,23 +229,29 @@ pub trait DeviceMap {
 
 /// Common disassembler operations
 pub trait Disassembler {
+	/// The associated processor type
+	type ProcDev;
+
 	/// Analyses one region
 	fn analyze(&mut self, offset: &mut usize) -> (usize, String);
-
-	/// Analyses a range of binary
-	fn analyze_range(&mut self, start: usize, end: usize) {
-		let mut offset = start;
-
-		while offset < end {
-			self.analyze(&mut offset);
-		}
-	}
 
 	/// Returns the code at the given offset, if any
 	fn get_code_at_offset(&self, offset: usize) -> Option<String>;
 
 	/// Returns the label at the given offset, if any
 	fn get_label_at_offset(&self, offset: usize) -> Option<String>;
+
+	/// Clocks the specified device, disassembling the execution
+	fn run(&mut self, dev: &mut Self::ProcDev) -> (usize, String);
+
+	// Analyses a range of binary
+	/*fn analyze_range(&mut self, start: usize, end: usize) {
+		let mut offset = start;
+
+		while offset < end {
+			self.analyze(&mut offset);
+		}
+	}*/
 }
 
 /// Common device operations

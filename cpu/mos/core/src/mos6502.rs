@@ -68,6 +68,11 @@ bitflags! {
 		/// Negative
 		const N = 128;
 	}
+
+	/// CPU flags
+	pub struct MOS6502Flags: u8 {
+		const DEBUG = 1;
+	}
 }
 
 impl Default for Status {
@@ -255,8 +260,8 @@ pub struct MOS6502 {
 impl MOS6502 {
 	/// Initialises a new 6502, given a bus pointer
 	pub fn new(bus: Rc<RefCell<Bus>>) -> MOS6502 {
-		let cpu = MOS6502 {
-			bus: Rc::clone(&bus),
+		let mut cpu = MOS6502 {
+			bus,
 			regs: Registers {
 				a: 0,
 				p: Status::default(),
@@ -275,8 +280,7 @@ impl MOS6502 {
 			},
 		};
 
-		//cpu.generate_regions(0, 65536);
-
+		cpu.reset();
 		cpu
 	}
 
@@ -333,12 +337,13 @@ impl MOS6502 {
 
 	/// Fetch byte from an operation as 16-bit
 	pub fn fetch16(&mut self) -> u16 {
-		self.fetch() as u16
+		self.fetch().into()
 	}
 
 	/// Fetch address
 	pub fn fetch_addr(&mut self) -> usize {
-		u16::from_le_bytes([self.fetch(), self.fetch()]).into()
+		let f = u16::from_le_bytes([self.fetch(), self.fetch()]).into();
+		dbg!(f)
 	}
 
 	/// Gets the accumulator register value
@@ -456,23 +461,18 @@ impl MOS6502 {
 		// write the counter's current value to stack
 		self.stack_write_addr(self.get_counter());
 
-		// write p register to stack too
+		// write state register to stack too
 		self.set_flag(Status::B, false);
 		self.set_flag(Status::U, true);
 		self.set_flag(Status::I, true);
 		self.stack_write(self.get_p_bits());
 
-		// get the new pc value
+		// get the new counter value
 		self.set_abs_addr(new_abs_addr);
 		let addr = self.fetch_addr();
 		self.set_counter(addr);
 
 		self.cache.cycles = new_cycles;
-	}
-
-	/// Reads an address from the RAM
-	pub fn read_addr(&self, addr: usize) -> usize {
-		self.bus.borrow().get_u16_le(addr) as usize
 	}
 
 	/// Reads a byte from the ROM
@@ -577,17 +577,17 @@ impl MOS6502 {
 	}
 
 	/// Reads an address from stack
-	pub fn stack_read_addr(&mut self) -> usize {
+	pub fn stack_get_ptr(&mut self) -> usize {
 		u16::from_le_bytes([self.stack_read(), self.stack_read()]) as usize
 	}
 
 	/// Convenience function to write to stack
 	pub fn stack_write(&mut self, data: u8) {
-		self.write(STACK_ADDR + self.get_sp(), &[data]);
+		self.write(STACK_ADDR + (self.get_sp() % 256), &[data]);
 		self.regs.s -= 1;
 	}
 
-	/// Returns a string of the stackdump
+	/// Returns a hexdump string of the stackdump
 	pub fn stackdump(&self) -> String {
 		let dump = self.read(STACK_ADDR, 256);
 		hexdump(&dump[..], 2)
@@ -616,25 +616,6 @@ impl MOS6502 {
 	/// Sends a non-maskable interrupt
 	pub fn nmi(&mut self) {
 		self.interrupt(NMI_ADDR, 8);
-	}
-
-	/// Resets the regs and cache
-	pub fn res(&mut self) {
-		self.set_a(0);
-		self.set_flag(Status::default(), true);
-		self.set_x(0);
-		self.set_y(0);
-		self.set_sp(STACK_INIT);
-
-		self.set_abs_addr(RES_ADDR);
-		let addr = self.fetch_addr();
-		self.set_counter(addr);
-
-		self.cache.rel_addr = 0;
-		self.set_abs_addr(0);
-		self.set_data(0);
-
-		self.cache.cycles = 8;
 	}
 
 	// --- ADDRESS MODES
@@ -671,8 +652,8 @@ impl MOS6502 {
 	/// Immediate address mode
 	pub fn imm(&mut self) -> u8 {
 		self.set_mode(Mode::IMM);
-		self.incr();
 		self.set_abs_addr(self.get_counter());
+		self.incr();
 		0
 	}
 
@@ -691,10 +672,10 @@ impl MOS6502 {
 
 		if (ptr & 255) == 255 {
 			// page boundary hardware bug
-			self.set_abs_addr(self.read_addr(ptr));
+			self.set_abs_addr(self.get_ptr(ptr));
 		} else {
 			// normal behavior
-			self.set_abs_addr(self.read_addr(ptr));
+			self.set_abs_addr(self.get_ptr(ptr));
 		}
 
 		0
@@ -874,7 +855,7 @@ impl MOS6502 {
 		self.set_flag(Status::B, true);
 		self.stack_write(self.get_p_bits());
 		self.set_flag(Status::B, false);
-		self.set_counter(self.read_addr(IRQ_ADDR));
+		self.set_counter(self.get_ptr(IRQ_ADDR));
 
 		0
 	}
@@ -1022,6 +1003,7 @@ impl MOS6502 {
 	/// Load into accumulator
 	pub fn lda(&mut self) -> u8 {
 		let fetch = self.fetch();
+		dbg!(fetch);
 		self.set_a(fetch);
 		self.set_flags_nz(self.get_a16());
 		1
@@ -1129,7 +1111,7 @@ impl MOS6502 {
 		self.regs.p.toggle(Status::U);
 
 		// and counter
-		let addr = self.stack_read_addr();
+		let addr = self.stack_get_ptr();
 		self.set_counter(addr);
 
 		0
@@ -1137,7 +1119,7 @@ impl MOS6502 {
 
 	/// Return from subroutine
 	pub fn rts(&mut self) -> u8 {
-		let addr = self.stack_read_addr();
+		let addr = self.stack_get_ptr();
 		self.set_counter(addr);
 		0
 	}
@@ -1206,7 +1188,7 @@ impl MOS6502 {
 
 	/// Transfer stack pointer to X
 	pub fn tsx(&mut self) -> u8 {
-		self.set_x(self.get_sp() as u8);
+		self.set_x((self.get_sp() % 256) as u8);
 		self.set_flags_nz(self.get_x16());
 		0
 	}
@@ -1234,7 +1216,7 @@ impl MOS6502 {
 
 impl Display for MOS6502 {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		writeln!(f, "{}", &self.regs);
+		writeln!(f, "{}", &self.regs)?;
 		writeln!(f, "{}", &self.cache)
 	}
 }
@@ -2696,8 +2678,29 @@ impl Processor for MOS6502 {
 		self.cache.cycles -= 1;
 	}
 
+	fn get_ptr(&self, offset: usize) -> usize {
+		self.get_u16_le(offset).into()
+	}
+
 	fn get_ptr_size(&self) -> usize {
 		2
+	}
+
+	fn reset(&mut self) {
+		self.set_a(0);
+		self.set_flag(Status::default(), true);
+		self.set_x(0);
+		self.set_y(0);
+		self.set_sp(STACK_INIT);
+		self.set_abs_addr(0);
+
+		let addr = self.get_ptr(RES_ADDR);
+		self.set_counter(addr);
+
+		self.cache.rel_addr = 0;
+		self.set_data(0);
+
+		self.cache.cycles = 8;
 	}
 }
 
@@ -2714,39 +2717,31 @@ mod tests {
 
 	#[test]
 	fn test_exec() {
-		//let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
+		let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
 
-		let hundred_doors = vec![0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
+		/*let hundred_doors = vec![0xa9,0x00,0xa2,0x64,0x95,0xc8,0xca,0xd0,0xfb,0x95,0xc8,0xa0,
 			0x01,0xc0,0x65,0xb0,0x12,0x98,0xc9,0x65,0xb0,0x0a,0xaa,0xfe,0x00,0x02,0x84,0x01,0x65,
 			0x01,0x90,0xf2,0xc8,0xd0,0xea,0xa2,0x64,0xbd,0x00,0x02,0x29,0x01,0x9d,0x00,0x02,0xca,
-			0xd0,0xf5];
+			0xd0,0xf5];*/
 
 		let mut bus = Bus::new(65536);
-		//bus.write(32768, &mario[16..32784]);
-		bus.write(32768, &hundred_doors[..]);
-
+		bus.write(32768, &mario[16..32784]);
+		//bus.write(32768, &hundred_doors[..]);
+		//println!("{}", &bus);
 		let mut cpu = MOS6502::new(Rc::new(RefCell::new(bus)));
 		let cfg = DisassemblerConfig::LOWERCASE | DisassemblerConfig::OFFSETS;
 		let mut da = MOS6502Disassembler::new(cpu.get_bus(), Some(cfg));
 
 		let mut input = String::new();
 		let mut offs = 0;
-		cpu.set_counter(32768);
 		while let Ok(_) = stdin().read_line(&mut input) {
 			match input.chars().nth(0).unwrap() {
+				'd' | 'D' => println!("{}", &da),
 				's' | 'S' => println!("{}", cpu.stackdump()),
 				_ => {
-					loop {
-						cpu.clock();
-						if cpu.get_cycles() == 0 {
-							offs = cpu.get_counter();
-							//dbg!(offs);
-							let (_, code) = da.analyze(&mut offs);
-							println!("{}", &cpu);
-							println!("{code}");
-							break;
-						}
-					}
+					let (o, c) = da.run(&mut cpu);
+					println!("{}", &cpu);
+					println!("{:04X}\t{c}", o);
 				},
 			}
 
