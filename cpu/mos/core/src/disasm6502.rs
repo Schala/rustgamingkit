@@ -12,17 +12,21 @@ use std::{
 };
 
 use crate::{
+	IRQ_ADDR,
 	Mode,
 	MOS6502,
-	Status
+	NMI_ADDR,
+	RES_ADDR,
+	STACK_ADDR,
 };
 
 use rgk_processors_core::{
 	Bus,
-	Device,
 	DeviceBase,
 	Disassembler,
-	Processor,
+	Region,
+	RegionFlags,
+	RegionMap,
 	RegionType
 };
 
@@ -315,6 +319,7 @@ static OPCODES: [Opcode; 256] = [
 	Opcode { mode: Mode::ABX, mnemonic: "NOP" }
 ];
 
+#[derive(Debug)]
 struct Opcode<'a> {
 	mode: Mode,
 	mnemonic: &'a str,
@@ -344,6 +349,7 @@ pub struct MOS6502Disassembler {
 	cfg: DisassemblerConfig,
 	bus: Rc<RefCell<Bus>>,
 	disasm: IndexMap<usize, String>,
+	rgns: RegionMap,
 }
 
 impl MOS6502Disassembler {
@@ -353,6 +359,7 @@ impl MOS6502Disassembler {
 			cfg: if let Some(conf) = cfg { conf } else { DisassemblerConfig::default() },
 			bus,
 			disasm: IndexMap::new(),
+			rgns: RegionMap::new(),
 		}
 	}
 }
@@ -360,15 +367,19 @@ impl MOS6502Disassembler {
 impl Disassembler for MOS6502Disassembler {
 	type ProcDev = MOS6502;
 
+	fn add_region(&mut self, address: usize, region: Region) {
+		if !self.region_exists(address) {
+			self.rgns.insert(address, region);
+		}
+	}
+
 	#[allow(unused_assignments)] // Rust will bitch about `code` assignment in conditionals
 	fn analyze(&mut self, offset: &mut usize) -> (usize, String) {
 		let start = *offset;
 		let mut code = "".to_owned();
 		let mut do_break = true;
 
-		if let Some(r) = self.bus.borrow().get_region(*offset) {
-			let r = r.borrow();
-
+		if let Some(r) = self.rgns.get(&*offset) {
 			if r.is_ptr() {
 				code.push('*');
 			}
@@ -431,8 +442,8 @@ impl Disassembler for MOS6502Disassembler {
 					do_break = false;
 				},
 				&RegionType::Pointer => {
-					if let Some(p) = self.bus.borrow().get_region(self.bus.borrow().get_u16_le(*offset) as usize) {
-						let p = p.borrow();
+					let addr = self.bus.borrow().get_u16_le(*offset) as usize;
+					if let Some(p) = self.rgns.get(&addr) {
 						code += format!("\t{}", p.get_label()).as_str();
 					} else {
 						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -541,8 +552,7 @@ impl Disassembler for MOS6502Disassembler {
 					if opbyte == 32 || opbyte == 76 {
 						let addr = self.bus.borrow().get_u16_le(*offset) as usize;
 
-						if let Some(r) = self.bus.borrow().get_region(addr) {
-							let r = r.borrow();
+						if let Some(r) = self.rgns.get(&addr) {
 							code += format!(" {}", r.get_label()).as_str();
 						}
 					} else {
@@ -588,8 +598,7 @@ impl Disassembler for MOS6502Disassembler {
 				Mode::IND => {
 					let addr = (self.bus.borrow().get_u16_le(*offset) + 2) as usize;
 
-					if let Some(r) = self.bus.borrow().get_region(addr) {
-						let r = r.borrow();
+					if let Some(r) = self.rgns.get(&addr) {
 						code += format!(" {}", r.get_label()).as_str();
 					} else {
 						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -607,8 +616,7 @@ impl Disassembler for MOS6502Disassembler {
 				Mode::REL => {
 					let addr = ((*offset as i32) + (self.bus.borrow().get_i8(*offset) as i32) + 1) as usize;
 
-					if let Some(r) = self.bus.borrow().get_region(addr) {
-						let r = r.borrow();
+					if let Some(r) = self.rgns.get(&addr) {
 						code += format!(" {}", r.get_label()).as_str();
 					} else {
 						if self.cfg.contains(DisassemblerConfig::DECIMAL) {
@@ -630,6 +638,121 @@ impl Disassembler for MOS6502Disassembler {
 		(start, code)
 	}
 
+	#[allow(unused_mut)] // Rust bitches it's unused when r.add_ref() is used
+	fn generate_regions(&mut self, dev: &mut Self::ProcDev, start: usize) {
+		let mut offset = start;
+		let mut jumps = vec![];
+		let mut counters = vec![];
+		let mut end_reached = false;
+
+		loop {
+			if end_reached {
+				// return from a jump
+				if let Some(i) = counters.pop() {
+					offset = i;
+				} else {
+					// ...or analyse the next entry in the jump table
+					if self.region_exists(offset) {
+						if let Some(i) = jumps.pop() {
+							offset = i;
+						} else {
+							break;
+						}
+					}
+				}
+			}
+
+			let op = dev.get_u8(offset) as usize;
+			offset += 1;
+			dbg!(&OPCODES[op]);
+
+			match op {
+				// relative, continue to next byte but cache the jump and counter
+				16 | 48 | 80 | 112 | 144 | 176 | 208 | 240 => {
+					let addr = ((offset as i32) + (dev.get_i8(offset) as i32) + 1) as u16;
+
+					if self.region_exists(addr as usize) {
+						let addrsz = addr as usize;
+						if let Some(mut r) = self.rgns.get_mut(&addrsz) {
+							r.add_ref(offset - 1);
+						}
+					} else {
+						let mut r = Region::new(0, RegionType::Label,  RegionFlags::default(),
+							format!("LAB_{:04X}", addr).as_str());
+						r.add_ref(offset - 1);
+						self.add_region(addr as usize, r);
+					}
+
+					jumps.push(addr as usize);
+					counters.push(offset);
+					offset += 1;
+				},
+
+				32 => { // JSR, label is a function
+					let addr = dev.get_u16_le(offset) as usize;
+
+					if self.region_exists(addr) {
+						let addrsz = addr as usize;
+						if let Some(mut r) = self.rgns.get_mut(&addrsz) {
+							r.label_to_fn(Some(format!("FUN_{:04X}", addr & 65535).as_str()));
+							r.add_ref(offset - 1);
+						}
+					} else {
+						let mut r = Region::new(0, RegionType::Function,  RegionFlags::default(),
+							format!("FUN_{:04X}", addr & 65535).as_str());
+						r.add_ref(offset - 1);
+						self.add_region(addr, r);
+					}
+
+					jumps.push(addr as usize);
+					counters.push(offset);
+					end_reached = true;
+				},
+
+				// returns
+				64 | 96 => end_reached = true,
+
+				76 | 108 => { // JMP absolute or indirect
+					let addr = dev.get_u16_le(offset);
+
+					if self.region_exists(addr as usize) {
+						let addrsz = addr as usize;
+						if let Some(mut r) = self.rgns.get_mut(&addrsz) {
+							r.add_ref(offset - 1);
+						}
+					} else {
+						let mut r = Region::new(0, RegionType::Label, RegionFlags::default(),
+							format!("LAB_{:04X}", addr).as_str());
+						r.add_ref(offset - 1);
+						self.add_region(addr as usize, r);
+					}
+
+					jumps.push(addr as usize);
+					counters.push(offset);
+					end_reached = true;
+				},
+
+				// absolute
+				12..=14 | 25 | 27..=30 | 44..=47 | 57 | 59..=63 | 77..=79 | 89 | 91..=95 | 109..=111 | 121 | 123..=127 |
+				140..=143 | 153 | 155..=159 | 172..=175 | 185 | 187..=191 | 204..=207 | 217 | 219..=223 | 236..=239 |
+				249 | 251..=255 => {
+					offset += 2;
+				},
+
+				// indirect, zero page, immediate
+				1 | 5..=7 | 9 | 17 | 19..=23 | 33 | 35..=39 | 41 | 43 | 49 | 51..=55 | 65 | 67..=71 | 73 | 75 |
+				81 | 83..=87 | 97 | 99..=103 | 105 | 107 | 113 | 115..=119 | 128..=135 | 137 | 139 | 145 | 147..=151 |
+				160..=167 | 169 | 171 | 177 | 179..=183 | 192..=199 | 201 | 203 | 209 | 211..=215 | 224..=231 | 233 |
+				235 | 241 | 243..=247 => {
+					offset += 1;
+				},
+
+				// misc. implied
+				_ => (),
+			}
+		}
+	}
+
 	fn get_code_at_offset(&self, offset: usize) -> Option<String> {
 		if let Some(s) = self.disasm.get(&offset) {
 			Some(s.to_string())
@@ -639,37 +762,58 @@ impl Disassembler for MOS6502Disassembler {
 	}
 
 	fn get_label_at_offset(&self, offset: usize) -> Option<String> {
-		if let Some(r) = self.bus.borrow().get_region(offset) {
-			let r = r.borrow();
+		if let Some(r) = self.rgns.get(&offset) {
 			Some(r.get_label().to_owned())
 		} else {
 			None
 		}
 	}
 
-	fn run(&mut self, dev: &mut Self::ProcDev) -> (usize, String) {
-		let mut offset = dev.get_counter();
+	fn region_exists(&self, offset: usize) -> bool {
+		self.rgns.contains_key(&offset)
+	}
 
-		loop {
-			dev.clock();
+	fn run(&mut self, dev: &mut Self::ProcDev) {
+		// add hardware vectors
+		let irq_vec = dev.get_u16_le(IRQ_ADDR) as usize;
+		let nmi_vec = dev.get_u16_le(NMI_ADDR) as usize;
+		let res_vec = dev.get_u16_le(RES_ADDR) as usize;
 
-			if dev.get_cycles() == 0 {
-				let (offs, code) = self.analyze(&mut offset);
-				if !self.disasm.contains_key(&offs) {
-					self.disasm.insert(offs, code.clone());
-				}
+		let mut irq_r = Region::new(0, RegionType::Function, RegionFlags::default(),
+			format!("FUN_{:04X}", irq_vec).as_str());
+		irq_r.add_ref(IRQ_ADDR);
 
-				return (offs, code);
-			}
-		}
+		let mut nmi_r = Region::new(0, RegionType::Function, RegionFlags::default(),
+			format!("FUN_{:04X}", nmi_vec).as_str());
+		nmi_r.add_ref(NMI_ADDR);
+
+		let mut res_r = Region::new(0, RegionType::Function, RegionFlags::default(),
+			format!("FUN_{:04X}", res_vec).as_str());
+		res_r.add_ref(RES_ADDR);
+
+		self.add_regions(RegionMap::from([
+			(0, Region::new(256, RegionType::Section, RegionFlags::default(), "ZERO_PAGE")),
+			(IRQ_ADDR, Region::new(2, RegionType::Pointer, RegionFlags::PTR, "IRQ")),
+			(NMI_ADDR, Region::new(2, RegionType::Pointer, RegionFlags::PTR, "NMI")),
+			(RES_ADDR, Region::new(2, RegionType::Pointer, RegionFlags::PTR, "RES")),
+			(STACK_ADDR, Region::new(256, RegionType::Unsigned8, RegionFlags::ARRAY, "STACK")),
+			(irq_vec, irq_r),
+			(nmi_vec, nmi_r),
+			(res_vec, res_r),
+		]));
+
+		// walk through and process
+		self.generate_regions(dev, res_vec);
+		self.generate_regions(dev, irq_vec);
+		self.generate_regions(dev, nmi_vec);
+		self.rgns.sort_keys();
 	}
 }
 
 impl Display for MOS6502Disassembler {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
 		for (o, c) in self.disasm.iter() {
-			if let Some(r) = self.bus.borrow().get_region(*o) {
-				let r = r.borrow();
+			if let Some(r) = self.rgns.get(o) {
 				write!(f, "\n\t{}:\t\t; REFS: ", r.get_label())?;
 				for x in r.get_refs().iter() {
 					write!(f, "{:04X} ", x)?;
@@ -691,7 +835,7 @@ impl Display for MOS6502Disassembler {
 mod tests {
 	use rgk_processors_core::{
 		Bus,
-		Disassembler
+		Device
 	};
 
 	use super::*;
@@ -775,7 +919,7 @@ mod tests {
 		}
 	}*/
 
-	/*#[test]
+	#[test]
 	fn test_disassemble_nes_rom() {
 		let mario = include_bytes!("/home/admin/Downloads/Super Mario Bros (PC10).nes");
 
@@ -783,11 +927,11 @@ mod tests {
 		bus.write(32768, &mario[16..32784]);
 
 		let cfg = DisassemblerConfig::LOWERCASE | DisassemblerConfig::OFFSETS;
-		let cpu = MOS6502::new(Rc::new(RefCell::new(bus)));
+		let mut cpu = MOS6502::new(Rc::new(RefCell::new(bus)));
 		let mut da = MOS6502Disassembler::new(cpu.get_bus(), Some(cfg));
 
-		da.analyze_range(32768, 65536);
+		da.run(&mut cpu);
 
 		println!("{}", da);
-	}*/
+	}
 }

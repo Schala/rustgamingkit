@@ -3,7 +3,6 @@ use indexmap::IndexMap;
 
 use std::{
 	cell::RefCell,
-	collections::HashMap,
 	fmt::{
 		Display,
 		Formatter,
@@ -79,7 +78,7 @@ pub enum RegionType {
 	PString,
 
 	/// Structure (struct, class, record, object, etc.)
-	Structure(RawRegionMap),
+	Structure(RegionMap),
 
 	/// Union/variant
 	Union(Vec<Region>),
@@ -95,8 +94,7 @@ pub struct Region {
 	size: usize,
 }
 
-pub type RawRegionMap = HashMap<usize, Region>;
-pub type RegionMap = IndexMap<usize, Rc<RefCell<Region>>>;
+pub type RegionMap = IndexMap<usize, Region>;
 
 impl Region {
 	/// Creates a new memory region with the specified type, size and label
@@ -205,35 +203,19 @@ pub trait Processor {
 	fn reset(&mut self);
 }
 
-/// Common memory region mapping operations
-pub trait DeviceMap {
-	/// Registers a region in memory
-	fn add_region(&mut self, address: usize, region: Region);
-
-	/// Generates regions between the given start and end offsets
-	fn generate_regions(&mut self, start: usize, end: usize);
-
-	/// Does the region exist at the specified offset?
-	fn region_exists(&self, offset: usize) -> bool;
-
-	/// Sorts region offsets in order
-	fn sort_regions(&mut self);
-
-	/// Registers multiple regions in memory
-	fn add_regions(&mut self, mut map: RawRegionMap) {
-		for (a, r) in map.drain() {
-			self.add_region(a, r);
-		}
-	}
-}
-
 /// Common disassembler operations
 pub trait Disassembler {
 	/// The associated processor type
 	type ProcDev;
 
+	/// Registers a region in memory
+	fn add_region(&mut self, address: usize, region: Region);
+
 	/// Analyses one region
 	fn analyze(&mut self, offset: &mut usize) -> (usize, String);
+
+	/// Auto-generates regions
+	fn generate_regions(&mut self, dev: &mut Self::ProcDev, start: usize);
 
 	/// Returns the code at the given offset, if any
 	fn get_code_at_offset(&self, offset: usize) -> Option<String>;
@@ -241,8 +223,18 @@ pub trait Disassembler {
 	/// Returns the label at the given offset, if any
 	fn get_label_at_offset(&self, offset: usize) -> Option<String>;
 
+	/// Does the region exist at the specified offset?
+	fn region_exists(&self, offset: usize) -> bool;
+
 	/// Clocks the specified device, disassembling the execution
-	fn run(&mut self, dev: &mut Self::ProcDev) -> (usize, String);
+	fn run(&mut self, dev: &mut Self::ProcDev);
+
+	/// Registers multiple regions in memory
+	fn add_regions(&mut self, mut map: RegionMap) {
+		for (a, r) in map.drain(..) {
+			self.add_region(a, r);
+		}
+	}
 
 	// Analyses a range of binary
 	/*fn analyze_range(&mut self, start: usize, end: usize) {
@@ -359,50 +351,19 @@ pub trait DeviceBase {
 pub trait Device: DeviceBase {
 	/// Gets a reference to the device's bus
 	fn get_bus(&self) -> Rc<RefCell<Bus>>;
-
-	/// Gets a region on this device
-	fn get_region(&self, offset: usize) -> Option<Rc<RefCell<Region>>>;
-
-	/// Gets a mutable region on this device
-	fn get_region_mut(&mut self, offset: usize) -> Option<Rc<RefCell<Region>>>;
-
-	/// Gets a vector of a copy of all regions, useful for debugging
-	fn get_all_regions(&self) -> Vec<(usize, Region)>;
 }
 
 /// Single-threaded memory bus
 #[derive(Clone, Debug)]
 pub struct Bus {
 	ram: Vec<u8>,
-	rgns: RegionMap,
 }
 
 impl Bus {
 	pub fn new(ram_size: usize) -> Bus {
 		Bus {
 			ram: vec![0; ram_size],
-			rgns: RegionMap::new(),
 		}
-	}
-}
-
-impl DeviceMap for Bus {
-	fn add_region(&mut self, address: usize, region: Region) {
-		if !self.region_exists(address) {
-			self.rgns.insert(address, Rc::new(RefCell::new(region)));
-		}
-	}
-
-	fn generate_regions(&mut self, _start: usize, _end: usize) {
-		unimplemented!("Region generation called on ambiguous memory bus");
-	}
-
-	fn region_exists(&self, offset: usize) -> bool {
-		self.rgns.contains_key(&offset)
-	}
-
-	fn sort_regions(&mut self) {
-		self.rgns.sort_keys();
 	}
 }
 
@@ -421,18 +382,6 @@ impl DeviceBase for Bus {
 impl Device for Bus {
 	fn get_bus(&self) -> Rc<RefCell<Bus>> {
 		unimplemented!("Bus attempted to get a reference counted pointer of itself");
-	}
-
-	fn get_region(&self, offset: usize) -> Option<Rc<RefCell<Region>>> {
-		self.rgns.get(&offset).cloned()
-	}
-
-	fn get_region_mut(&mut self, offset: usize) -> Option<Rc<RefCell<Region>>> {
-		self.rgns.get_mut(&offset).cloned()
-	}
-
-	fn get_all_regions(&self) -> Vec<(usize, Region)> {
-		self.rgns.iter().map(|(o, r)| (*o, r.borrow().clone())).collect()
 	}
 }
 

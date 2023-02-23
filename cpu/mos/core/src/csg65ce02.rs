@@ -9,8 +9,7 @@ use std::fmt::{
 };
 
 use mos6502::{
-	Mode
-	MOS6502,
+	Mode,
 	Status
 };
 
@@ -220,36 +219,76 @@ impl From<Status> for ExStatus {
 	}
 }
 
-/// CSG 65CE02 extended registers
+/// Registers
 #[derive(Clone, Copy, Debug)]
-struct ExRegisters {
-	/// base page
+pub struct Registers {
+	/// accumulator
+	a: u8,
+
+	/// bank page
 	b: u8,
 
-	/// extended state flags
+	/// state flags
 	p: ExStatus,
 
 	/// general purpose
+	x: u8,
+
+	/// general purpose
+	y: u8,
+
+	/// general purpose
 	z: u8,
+
+	/// program counter, 16 bit
+	pc: usize,
+
+	/// stack pointer, 8 bit
+	s: usize,
 }
 
-/// CSG 65CE02 fetch data
-#[derive(Clone, Copy, Debug)]
+/// Fetch data
+#[derive(Clone, Copy, Debug, Default)]
 enum Data {
+	#[default]
 	Byte(u8),
 	Word(u16),
 }
 
-/// CSG 65CE02 extended cache
-#[derive(Clone, Copy, Debug)]
-struct ExCache {
-	mode: ExMode,
-	data: Data,
+impl Display for Data {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		match self {
+			Byte(b) => write!(f, "${:02X}", b),
+			Word(w) => write!(f, "${:04X}", w),
+		}
+	}
 }
 
-impl Display for ExCache {
+/// CSG 65CE02 extended cache
+#[derive(Clone, Copy, Debug)]
+pub struct Cache {
+	/// remaining cycles on current operation
+	cycles: u8,
+
+	/// last fetched opcode's associated mode
+	mode: ExMode,
+
+	/// last fetched data
+	data: Data,
+
+	/// last relative address is actually 1 byte, but this avoids casting every use
+	rel_addr: usize,
+
+	/// last fetched opcode, actually 1 byte, but this avoids casting every use
+	opcode: usize,
+
+	/// last absolute address, actually 2 bytes, but this avoids casting every use
+	abs_addr: usize,
+}
+
+impl Display for Cache {
 	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-		writeln!(f, "Last fetched byte: ${:X}", self.get_data())?;
+		writeln!(f, "Last fetched data: {}", self.get_data())?;
 		writeln!(f, "Last fetched opcode: ${:X}", self.get_opcode())?;
 		writeln!(f, "Cycles remaining: {}", self.self.get_cycles())?;
 		writeln!(f, "Last fetched absolute address: ${:X}", self.get_abs_addr())?;
@@ -266,18 +305,29 @@ pub struct CSG65CE02 {
 
 impl CSG65CE02 {
 	/// Initialises a new 65CE02, given a bus pointer
-	pub fn new(bus: Rc<Bus>) -> MOS6502 {
-		CSG65CE02 {
-			base: MOS6502::new(bus),
+	pub fn new(bus: Rc<RefCell<Bus>>) -> MOS6502 {
+		let mut cpu = CSG65CE02 {
+			bus,
 			regs: Registers {
-				b: 0,
-				p: ExStatus::default(),
-				z: 0,
+				a: 0,
+				p: Status::default(),
+				x: 0,
+				y: 0,
+				pc: RES_ADDR,
+				s: 0,
 			},
 			cache: Cache {
+				cycles: 0,
 				mode: ExMode::IMP,
+				data: Data::Byte(0),
+				rel_addr: 0,
+				opcode: 0,
+				abs_addr: 0,
 			},
-		}
+		};
+
+		cpu.reset();
+		cpu
 	}
 
 	/// Checks specified status flag(s)
@@ -285,893 +335,704 @@ impl CSG65CE02 {
 		self.regs.p.contains(flag)
 	}
 
-	/// Assign to accumulator, or write to bus, depending on the address mode
-	fn check_mode(&mut self, value: u16) {
-		if self.get_mode() == ExMode::IMP {
-			self.base.set_a((value & 255) as u8);
-		} else {
-			self.base.write_last((value & 255) as u8);
-		}
-	}
-
 	/// Fetch word from an operation
 	fn fetchw(&mut self) -> u16 {
-		u16::from_le_bytes([self.self.fetch16(), self.base.fetch16()])
+		u16::from_le_bytes([self.fetch(), self.fetch()])
 	}
 
 	/// Gets the base page register value as a 16-bit value
-	pub const fn get_b16(&self) -> u16 {
+	const fn get_b16(&self) -> u16 {
 		self.regs.b as u16
 	}
 
-	/// Gets the carry bit
-	pub const fn get_carry(&self) -> u16 {
-		(self.check_flag(ExStatus::C) as u16) & 1
+	/// Get cached word data
+	const fn get_dataw(&self) -> u16 {
+		match self.cache.data {
+			Data::Byte(b) => b as u16,
+			Data::Word(w) => w,
+		}
 	}
 
 	/// Retrieves the currently cached address mode
-	pub const fn get_mode(&self) -> ExMode {
+	const fn get_mode(&self) -> ExMode {
 		self.cache.mode
 	}
 
-	/// Retrieve the registry state flag bits
-	pub const fn get_p_bits(&self) -> u8 {
-		self.regs.p.bits()
-	}
-
 	/// Gets the Z register value
-	pub const fn get_z(&self) -> u8 {
+	const fn get_z(&self) -> u8 {
 		self.regs.z
 	}
 
 	/// Gets the Z register value as 16-bit
-	pub const fn get_z16(&self) -> u16 {
+	const fn get_z16(&self) -> u16 {
 		self.get_z() as u16
 	}
 
-	/// Interrupts the execution state
-	pub fn interrupt(&mut self, new_abs_addr: usize, new_cycles: u8) {
-		// write the counter's current value to stack
-		self.base.stack_write_addr(self.get_counter());
-
-		// write state register to stack too
-		self.set_flag(ExStatus::B, false);
-		self.set_flag(ExStatus::I, true);
-		self.base.stack_write(self.get_p_bits());
-
-		// get the new pc value
-		self.base.set_abs(new_abs_addr);
-		let addr = self.base.fetch_addr();
-		self.base.set_counter(addr);
-
-		self.base.set_cycles(new_cycles);
-	}
-
 	/// Sets base page register value
-	pub fn set_b(&mut self, value: u8) {
+	fn set_b(&mut self, value: u8) {
 		self.regs.b = value;
 	}
 
 	/// Sets status register flag
-	pub fn set_flag(&mut self, flags: Status, condition: bool) {
+	fn set_flag(&mut self, flags: Status, condition: bool) {
 		self.regs.p.set(flags, condition);
 	}
 
-	/// Set carry, negative, and/or zero bits of state flags register, given a value
-	pub fn set_flags_cnz(&mut self, value: u16) {
-		self.set_flag(Status::C, value > 255);
-		self.set_flags_nz(value);
-	}
-
-	/// Set negative and/or zero bits of state flags register, given a value
-	pub fn set_flags_nz(&mut self, value: u16) {
-		self.set_if_0(value);
-		self.set_if_neg(value);
-	}
-
-	/// Set the flag if the value is zero
-	pub fn set_if_0(&mut self, value: u16) {
-		self.set_flag(ExStatus::Z, (value & 255) == 0)
-	}
-
-	/// Set the flag if the value is negative
-	pub fn set_if_neg(&mut self, value: u16) {
-		self.set_flag(Status::N, value & 128 != 0)
-	}
-
 	/// Set cached address mode. Only address mode functions should use this!
-	pub fn set_mode(&mut self, mode: Mode) {
+	fn set_mode(&mut self, mode: ExMode) {
 		self.cache.mode = mode;
 	}
 
-	/// Sets stack pointer
-	pub fn set_sp(&mut self, value: usize) {
-		self.regs.s = value;
-	}
-
-	/// Sets X register value
-	pub fn set_x(&mut self, value: u8) {
-		self.regs.x = value;
-	}
-
-	/// Sets Y register value
-	pub fn set_y(&mut self, value: u8) {
-		self.regs.y = value;
-	}
-
 	/// Sets Z register value
-	pub fn set_z(&mut self, value: u8) {
+	fn set_z(&mut self, value: u8) {
 		self.regs.z = value;
 	}
 
-	/// Convenience function to read from stack
-	pub fn stack_read(&mut self) -> u8 {
-		self.regs.s += 1;
-		self.get_u8(STACK_ADDR + self.get_sp())
+	/// Writes a 16-bit word to stack
+	fn stack_write16(&mut self, data: u16) {
+		self.stack_write(((data & 0xFF00) >> 8) as u8);
+		self.stack_write((data & 255) as u8);
 	}
 
-	/// Reads an address from stack
-	pub fn stack_read_addr(&mut self) -> usize {
-		u16::from_le_bytes([self.stack_read(), self.stack_read()]) as usize
+	/// Writes a 16-bit word to the last absolute address
+	fn write_last16(&mut self, data: u16) {
+		let dat = data.to.le_bytes();
+		self.write(self.get_abs_addr(), &dat[..]);
 	}
 
-	/// Convenience function to write to stack
-	pub fn stack_write(&mut self, data: u8) {
-		self.write(STACK_ADDR + self.get_sp(), &[data]);
-		self.regs.s -= 1;
-	}
-
-	/// Writes an address to stack
-	pub fn stack_write_addr(&mut self, addr: usize) {
-		self.stack_write(((addr & 0xFF00) >> 8) as u8);
-		self.stack_write((addr & 255) as u8);
-	}
-
-	/// Writes to the last absolute address
-	pub fn write_last(&mut self, data: u8) {
-		self.write(self.get_abs_addr(), &[data]);
-	}
-
-	// --- SYSTEM FLOW
-
-	/// Sends an interrupt request if able
-	pub fn irq(&mut self) {
-		if !self.check_flag(Status::I) {
-			self.interrupt(IRQ_ADDR, 7);
-		}
-	}
-
-	/// Sends a non-maskable interrupt
-	pub fn nmi(&mut self) {
-		self.interrupt(NMI_ADDR, 8);
-	}
-
-	/// Resets the regs and cache
-	pub fn res(&mut self) {
-		self.set_a(0);
-		self.set_b(0);
-		self.set_flag(Status::default(), true);
-		self.set_x(0);
-		self.set_y(0);
-		self.set_z(0);
-		self.set_sp(STACK_INIT);
-
-		self.set_abs(RES_ADDR);
-		let addr = self.fetch_addr();
-		self.set_counter(addr);
-
-		self.cache.rel_addr = 0;
-		self.set_abs(0);
-		self.set_data(0);
-
-		self.cache.cycles = 8;
-	}
-
-	// --- ADDRESS MODES
-
-	/// Absolute address mode
-	pub fn abs(&mut self) -> u8 {
-		self.set_mode(ExMode::ABS);
-		let addr = self.base.read_rom_addr();
-		self.base.set_abs(addr);
-
+	/// Accumulative address mode
+	fn acc(&mut self) -> u8 {
+		self.set_mode(ExMode::ACC);
 		0
 	}
 
-	/// Absolute address mode with X register offset
-	pub fn abx(&mut self) -> u8 {
-		self.set_mode(ExMode::ABX);
-
-		let addr = self.base.read_rom_addr();
-		self.base.set_abs_addr(addr + self.base.get_x_zp_addr());
-
-		self.base.check_page(addr)
-	}
-
-	/// Absolute address mode with Y register offset
-	pub fn aby(&mut self) -> u8 {
-		self.set_mode(ExMode::ABY);
-
-		let addr = self.base.read_rom_addr();
-		self.base.set_abs_addr(addr + self.base.get_y_zp_addr());
-
-		self.check_page(addr)
-	}
-
-	/// Immediate address mode
-	pub fn imm(&mut self) -> u8 {
-		self.set_mode(ExMode::IMM);
-		self.base.incr();
-		self.base.set_abs_addr(self.base.get_counter());
+	/// Base page address mode
+	fn bpg(&mut self) -> u8 {
+		self.set_mode(ExMode::BPG);
 		0
 	}
 
-	/// Implied address mode
-	pub fn imp(&mut self) -> u8 {
-		self.set_mode(ExMode::IMP);
-		self.base.set_data(self.base.get_a());
+	/// Base page address mode with X offset
+	fn bpx(&mut self) -> u8 {
+		self.set_mode(ExMode::BPX);
 		0
 	}
 
-	/// Indirect address mode (pointer access)
-	pub fn ind(&mut self) -> u8 {
-		self.set_mode(ExMode::IND);
-
-		let ptr = self.base.read_rom_addr();
-
-		if (ptr & 255) == 255 {
-			// page boundary hardware bug
-			self.base.set_abs_addr(self.base.read_addr(ptr));
-		} else {
-			// normal behavior
-			self.base.set_abs_addr(self.base.read_addr(ptr));
-		}
-
+	/// Base page address mode with Y offset
+	fn bpy(&mut self) -> u8 {
+		self.set_mode(ExMode::BPY);
 		0
 	}
 
-	/// Indirect address mode of zero-page with X register offset
-	pub fn izx(&mut self) -> u8 {
-		self.set_mode(ExMode::IZX);
-
-		let t = self.base.read_rom_zp_addr();
-		let lo = self.base.get_zp_addr((t + self.base.get_x_zp_addr()) & 255);
-		let hi = self.base.get_zp_addr((t + self.base.get_x_zp_addr() + 1) & 255);
-
-		self.base.set_abs((hi << 8) | lo);
+	/// Base page address mode with Z offset
+	fn bpz(&mut self) -> u8 {
+		self.set_mode(ExMode::BPZ);
 		0
 	}
 
-	/// Indirect address mode of zero-page with Y register offset
-	pub fn izy(&mut self) -> u8 {
-		self.set_mode(ExMode::IZY);
-
-		let t = self.base.read_rom_zp_addr();
-		let lo = self.base.get_zp_addr(t & 255);
-		let hi = self.base.get_zp_addr((t + 1) & 255);
-
-		self.base.set_abs_addr(((hi << 8) | lo) + self.base.get_y_zp_addr());
-
-		if self.base.get_abs_hi() != (hi << 8) { 1 } else { 0 }
+	/// Immediate word address mode
+	fn imw(&mut self) -> u8 {
+		self.set_mode(ExMode::IMW);
+		self.set_abs_addr(self.get_counter());
+		self.incr();
+		0
 	}
 
-	/// Relative address mode (branching instructions)
-	pub fn rel(&mut self) -> u8 {
-		self.set_mode(ExMode::REL);
-		self.base.set_rel_addr(self.base.read_rom_zp_addr());
+	/// Word-relative address mode
+	fn wrl(&mut self) -> u8 {
+		self.set_mode(ExMode::WRL);
+		self.cache.rel_addr = self.read_rom_addr();
 
 		// check_flag for signed bit
-		if self.base.get_rel_addr() & 128 != 0 {
-			self.set_rel_addr(self.base.get_rel_addr() | 0xFF00);
+		if self.get_rel_addr() & 32768 != 0 {
+			self.cache.rel_addr |= 0xFF00;
 		}
-
-		0
-	}
-
-	/// Zero-page address mode
-	pub fn zpg(&mut self) -> u8 {
-		self.base.set_mode(ExMode::ZPG);
-		let addr = self.base.read_rom_zp_addr();
-		self.base.set_abs_addr(addr);
-		self.base.incr();
-		self.base.set_abs_addr(self.base.get_abs_addr() & 255);
-		0
-	}
-
-	/// Zero-page address mode with X register offset
-	pub fn zpx(&mut self) -> u8 {
-		self.set_mode(ExMode::ZPX);
-		let addr = self.base.read_rom_zp_addr();
-		self.set_abs_addr(addr + self.base.get_x_zp_addr());
-		self.base.set_abs_addr(self.base.get_abs_addr() & 255);
-		0
-	}
-
-	/// Zero-page address mode with Y register offset
-	pub fn zpy(&mut self) -> u8 {
-		self.set_mode(Mode::ZPY);
-		let addr = self.read_rom_zp_addr();
-		self.set_abs(addr + self.get_y_zp_addr());
-		self.base.set_abs_addr(self.base.get_abs_addr() & 255);
-		0
-	}
-
-	// --- OPERATIONS
-
-	/// Addition with carry
-	pub fn adc(&mut self) -> u8 {
-		let fetch = self.fetch16();
-		let tmp = self.get_a16() + (fetch + self.get_carry());
-
-		self.set_flags_cnz(tmp);
-
-		self.set_flag(Status::V, !(((self.get_a16() ^ self.get_data16()) &
-			(self.get_a16() ^ tmp)) & 128) == 0);
-
-		self.set_a((tmp & 255) as u8);
-
-		1
-	}
-
-	/// Bitwise and
-	pub fn and(&mut self) -> u8 {
-		self.regs.a &= self.fetch();
-		self.set_flags_nz(self.get_a16());
-
-		1
-	}
-
-	/// Arithmetical left shift
-	pub fn asl(&mut self) -> u8 {
-		let tmp = self.fetch16() << 1;
-		self.set_flags_cnz(tmp);
-		self.check_mode(tmp);
 
 		0
 	}
 
 	/// Arithmetical left shift (word)
-	pub fn asw(&mut self) -> u8 {
+	fn asw(&mut self) -> u8 {
 		let tmp = self.fetchw() << 1;
-		self.set_flags_cnz(tmp);
+		self.set_cnz(tmp);
 		self.check_mode(tmp);
 
 		0
 	}
 
-	/// Branching if carry clear
-	pub fn bcc(&mut self) -> u8 {
-		if !self.check_flag(Status::C) {
-			self.branch();
-		}
-
-		0
-	}
-
-	/// Branching if carry
-	pub fn bcs(&mut self) -> u8 {
-		if self.check_flag(Status::C) {
-			self.branch();
-		}
-
-		0
-	}
-
-	/// Branching if equal (zero)
-	pub fn beq(&mut self) -> u8 {
-		if self.check_flag(Status::Z) {
-			self.branch();
-		}
-
-		0
-	}
-
-	/// Bit test
-	pub fn bit(&mut self) -> u8 {
-		let fetch = self.fetch16();
-		self.set_if_0(self.get_a16() & fetch);
-		self.set_if_neg(self.get_data16());
-		self.set_flag(Status::V, self.get_data() & 64 != 0);
-
-		0
-	}
-
-	/// Branching if negative
-	pub fn bmi(&mut self) -> u8 {
-		if self.check_flag(Status::N) {
-			self.branch();
-		}
-
-		0
-	}
-
-	/// Branching if not equal (non-zero)
-	pub fn bne(&mut self) -> u8 {
-		if !self.check_flag(Status::Z) {
-			self.branch();
-		}
-
-		0
-	}
-
-	/// Branching if positive
-	pub fn bpl(&mut self) -> u8 {
-		if !self.check_flag(Status::N) {
-			self.branch();
-		}
-
+	/// The functionality of this opcode is unknown and is currently a no-op
+	fn aug(&self) -> u8 {
 		0
 	}
 
 	/// Branch always
-	pub fn bra(&mut self) -> u8 {
+	fn bra(&mut self) -> u8 {
 		self.branch();
 		0
-	}
-
-	/// Program-sourced interrupt.
-	pub fn brk(&mut self) -> u8 {
-		// This differs slightly from self.interrupt()
-
-		self.incr();
-		self.set_flag(Status::I, true);
-		self.stack_write_addr(self.get_counter());
-		self.set_flag(Status::B, true);
-		self.stack_write(self.get_p_bits());
-		self.set_flag(Status::B, false);
-		self.set_counter(self.read_addr(IRQ_ADDR));
-
-		0
-	}
-
-	/// Jump to address
-	pub fn bru(&mut self) -> u8 {
-		self.base.jmp()
 	}
 
 	/// Branch to subroutine
-	pub fn bsr(&mut self) -> u8 {
-		self.stack_write_addr(self.get_counter());
+	fn bsr(&mut self) -> u8 {
+		self.stack_write_ptr(self.get_counter());
 		self.branch();
-		0
-	}
-
-	/// Branching if overflow
-	pub fn bvc(&mut self) -> u8 {
-		if self.check_flag(Status::V) {
-			self.branch();
-		}
-
-		0
-	}
-
-	/// Branching if not overflow
-	pub fn bvs(&mut self) -> u8 {
-		if !self.check_flag(Status::V) {
-			self.branch();
-		}
-
-		0
-	}
-
-	/// Clear carry bit
-	pub fn clc(&mut self) -> u8 {
-		self.set_flag(Status::C, false);
-		0
-	}
-
-	/// Clear decimal bit
-	pub fn cld(&mut self) -> u8 {
-		self.set_flag(Status::D, false);
 		0
 	}
 
 	/// Clear stack extend bit
-	pub fn cle(&mut self) -> u8 {
+	fn cle(&mut self) -> u8 {
 		self.set_flag(Status::E, false);
 		0
 	}
 
-	/// Clear interrupt disable bit
-	pub fn cli(&mut self) -> u8 {
-		self.set_flag(Status::I, false);
-		0
-	}
-
-	/// Clear overflow bit
-	pub fn clv(&mut self) -> u8 {
-		self.set_flag(Status::V, false);
-		0
-	}
-
-	/// Compare with accumulator
-	pub fn cmp(&mut self) -> u8 {
+	/// Compare with Z register value
+	fn cpz(&mut self) -> u8 {
 		let fetch = self.fetch();
-		self.set_flag(Status::C, self.get_a() >= fetch);
-		self.set_flags_nz(self.get_a16() - self.get_data16());
-
-		1
-	}
-
-	/// Compare with X
-	pub fn cpx(&mut self) -> u8 {
-		let fetch = self.fetch();
-		self.set_flag(Status::C, self.get_a() >= fetch);
-		self.set_flags_nz(self.get_x16() - self.get_data16());
-
-		1
-	}
-
-	/// Compare with Y
-	pub fn cpy(&mut self) -> u8 {
-		let fetch = self.fetch();
-		self.set_flag(Status::C, self.get_y() >= fetch);
-		self.set_flags_nz(self.get_y16() - self.get_data16());
-
-		1
-	}
-
-	/// Compare with Z
-	pub fn cpz(&mut self) -> u8 {
-		let fetch = self.fetch();
-		self.set_flag(Status::C, self.get_z() >= fetch);
-		self.set_flags_nz(self.get_z16() - self.get_data16());
+		self.set_carry_if(self.get_z() >= fetch);
+		self.set_nz(self.get_z16() - self.get_data16());
 
 		1
 	}
 
 	/// Decrement accumulator
-	pub fn dex(&mut self) -> u8 {
+	fn dea(&mut self) -> u8 {
 		self.regs.a -= 1;
-		self.set_flags_nz(self.get_a16());
+		self.set_nz(self.get_a16());
 
 		0
 	}
 
-	/// Decrement value
-	pub fn dec(&mut self) -> u8 {
-		let tmp = self.fetch16() - 1;
-		self.write_last(tmp);
-		self.set_flags_nz(tmp);
-
-		0
-	}
-
-	/// Decrement X register
-	pub fn dex(&mut self) -> u8 {
-		self.regs.x -= 1;
-		self.set_flags_nz(self.get_x16());
-
-		0
-	}
-
-	/// Decrement Y register
-	pub fn dey(&mut self) -> u8 {
-		self.regs.y -= 1;
-		self.set_flags_nz(self.get_y16());
-
+	/// Decrement word
+	fn dew(&mut self) -> u8 {
+		let w = self.fetchw() - 1;
+		self.write_last16(w);
+		self.set_nz(w);
 		0
 	}
 
 	/// Decrement Z register
-	pub fn dez(&mut self) -> u8 {
+	fn dez(&mut self) -> u8 {
 		self.regs.z -= 1;
-		self.set_flags_nz(self.get_z16());
+		self.set_nz(self.get_z16());
 
 		0
-	}
-
-	/// Exclusive or
-	pub fn eor(&mut self) -> u8 {
-		self.regs.a ^= self.fetch();
-		self.set_flags_nz(self.get_a16());
-
-		1
 	}
 
 	/// Increment accumulator register
-	pub fn ina(&mut self) -> u8 {
+	fn ina(&mut self) -> u8 {
 		self.regs.a += 1;
-		self.set_flags_nz(self.get_a16());
+		self.set_nz(self.get_a16());
 
 		0
 	}
 
-	/// Increment value
-	pub fn inc(&mut self) -> u8 {
-		let tmp = self.fetch16() + 1;
-		self.base.write_last(tmp);
-		self.set_flags_nz(tmp);
-
-		0
-	}
-
-	/// Increment X register
-	pub fn inx(&mut self) -> u8 {
-		self.base.set_x(self.base.get_x() + 1);
-		self.set_flags_nz(self.base.get_x16());
-
-		0
-	}
-
-	/// Increment Y register
-	pub fn iny(&mut self) -> u8 {
-		self.base.set_y(self.base.get_y() + 1);
-		self.set_flags_nz(self.base.get_y16());
-
+	/// Increment word
+	fn inw(&mut self) -> u8 {
+		let w = self.fetchw() + 1;
+		self.write_last16(w);
+		self.set_nz(w);
 		0
 	}
 
 	/// Increment Z register
-	pub fn inz(&mut self) -> u8 {
+	fn inz(&mut self) -> u8 {
 		self.regs.z += 1;
-		self.set_flags_nz(self.get_z16());
+		self.set_nz(self.get_z16());
 
 		0
-	}
-
-	/// Load into accumulator
-	pub fn lda(&mut self) -> u8 {
-		let b = self.fetch();
-		self.base.set_a(fetch);
-		self.set_flags_nz(self.base.get_a16());
-		1
-	}
-
-	/// Load into X
-	pub fn ldx(&mut self) -> u8 {
-		let b = self.base.fetch();
-		self.base.set_x(b);
-		self.set_flags_nz(self.base.get_x16());
-		1
-	}
-
-	/// Load into Y
-	pub fn ldy(&mut self) -> u8 {
-		let b = self.base.fetch();
-		self.base.set_y(b);
-		self.set_flags_nz(self.base.get_y16());
-		1
 	}
 
 	/// Load into Z
-	pub fn ldz(&mut self) -> u8 {
-		let b = self.base.fetch();
+	fn ldz(&mut self) -> u8 {
+		let b = self.fetch();
 		self.set_z(b);
-		self.set_flags_nz(self.get_z16());
+		self.set_nz(self.get_z16());
 		1
-	}
-
-	/// Logical right shift
-	pub fn lsr(&mut self) -> u8 {
-		let tmp = self.fetch16() >> 1;
-		self.set_flags_cnz(tmp);
-		self.check_mode(tmp);
-
-		0
 	}
 
 	/// Two's compliment negation. The following byte should be the accumulator.
-	pub fn neg(&mut self) -> u8 {
+	fn neg(&mut self) -> u8 {
 		let tmp = !self.fetch16() + 1;
-		self.set_flags_cnz(tmp);
+		self.set_cnz(tmp);
 		self.check_mode(tmp);
 
 		0
 	}
 
-	/// No operation, illegal opcode filler
-	pub fn nop(&self) -> u8 {
-		match self.get_opcode() {
-			28 | 60 | 92 | 124 | 220 | 252 => 1,
-			_ => 0,
-		}
-	}
-
-	/// Bitwise or
-	pub fn ora(&mut self) -> u8 {
-		let b = self.base.fetch();
-		self.base.set_a(b);
-		self.set_flags_nz(self.base.get_a16());
-
-		1
-	}
-
-	/// Push accumulator register to the stack
-	pub fn pha(&mut self) -> u8 {
-		self.stack_write(self.base.get_a());
+	/// Push word to the stack
+	fn phw(&mut self) -> u8 {
+		self.stack_write16(self.get_dataw());
 		0
 	}
 
-	/// Push state register to the stack
-	pub fn php(&mut self) -> u8 {
+	/// Push X register to the stack
+	fn phx(&mut self) -> u8 {
+		self.stack_write(self.get_x());
+		0
+	}
+
+	/// Push Y register to the stack
+	fn phy(&mut self) -> u8 {
+		self.stack_write(self.get_y());
+		0
+	}
+
+	/// Push Z register to the stack
+	fn phz(&mut self) -> u8 {
+		self.stack_write(self.get_z());
+		0
+	}
+
+	/// Pop X register from the stack
+	fn plx(&mut self) -> u8 {
+		let b = self.stack_read();
+		self.set_x(b);
+		self.set_nz(self.get_x16());
+
+		0
+	}
+
+	/// Pop Y register from the stack
+	fn ply(&mut self) -> u8 {
+		let b = self.stack_read();
+		self.set_y(b);
+		self.set_nz(self.get_y16());
+
+		0
+	}
+
+	/// Pop Z register from the stack
+	fn plz(&mut self) -> u8 {
+		let b = self.stack_read();
+		self.set_z(b);
+		self.set_nz(self.get_z16());
+
+		0
+	}
+
+	/// Bit rotate right (word)
+	fn row(&mut self) -> u8 {
+		let tmp = self.fetchw().rotate_right(1);
+		self.set_cnz(tmp);
+		self.check_mode(tmp);
+
+		0
+	}
+
+	/// Set stack extend bit
+	fn see(&mut self) -> u8 {
+		self.set_flag(ExStatus::D, true);
+		0
+	}
+
+	/// Store Z at address
+	fn stz(&mut self) -> u8 {
+		self.write_last(self.get_z());
+		0
+	}
+
+	/// Transfer accumulator to base page
+	fn tab(&mut self) -> u8 {
+		self.set_b(self.get_a());
+		self.set_nz(self.get_b16());
+		0
+	}
+
+	/// Transfer accumulator to Z
+	fn taz(&mut self) -> u8 {
+		self.set_z(self.get_a());
+		self.set_nz(self.get_z16());
+		0
+	}
+
+	/// Transfer base page to accumulator
+	fn tba(&mut self) -> u8 {
+		self.set_a(self.get_b());
+		self.set_nz(self.get_a16());
+		0
+	}
+
+	/// Transfer stack pointer to base page
+	fn tsb(&mut self) -> u8 {
+		self.set_b(self.get_sp() as u8);
+		self.set_nz(self.get_b16());
+		0
+	}
+
+	/// Transfer stack pointer to Y register
+	fn tsy(&mut self) -> u8 {
+		self.set_y(self.get_sp() as u8);
+		self.set_nz(self.get_y16());
+		0
+	}
+
+	/// Transfer Y register to stack pointer
+	fn tys(&mut self) -> u8 {
+		self.set_sp(self.get_y_zp_addr());
+		0
+	}
+
+	/// Transfer Z to accumulator
+	fn tza(&mut self) -> u8 {
+		self.set_a(self.get_z());
+		self.set_nz(self.get_a16());
+		0
+	}
+}
+
+impl Helper6502 for CSG65CE02 {
+	fn add_cycles(&mut self, value: u8) {
+		self.cache.cycles += value;
+	}
+
+	fn check_mode(&mut self, value: u16) {
+		if self.get_mode() == ExMode::IMP {
+			self.set_a((value & 255) as u8);
+		} else {
+			self.write_last((value & 255) as u8);
+		}
+	}
+
+	fn fetch(&mut self) -> u8 {
+		if self.get_mode() != ExMode::IMP {
+			self.set_data(self.get_u8(self.get_abs_addr()));
+		}
+
+		self.get_data()
+	}
+
+	fn get_0(&self) -> bool {
+		self.check_flag(ExStatus::Z)
+	}
+
+	fn get_a(&self) -> u8 {
+		self.regs.a
+	}
+
+	fn get_abs_addr(&self) -> usize {
+		self.cache.abs_addr
+	}
+
+	fn get_carry(&self) -> u16 {
+		self.check_flag(ExStatus::C).into() & 1
+	}
+
+	fn get_carry_bit(&self) -> u16 {
+		(self.get_carry() as u16) & 1
+	}
+
+	fn get_counter(&self) -> usize {
+		self.regs.pc
+	}
+
+	fn get_cycles(&self) -> u8 {
+		self.cache.cycles
+	}
+
+	fn get_data(&self) -> u8 {
+		match self.cache.data {
+			Data::Byte(b) => b,
+			Data::Word(w) => (w & 255) as u8,
+		}
+	}
+
+	fn get_neg(&self) -> bool {
+		self.check_flag(ExStatus::N)
+	}
+
+	fn get_opcode(&self) -> usize {
+		self.cache.opcode as usize
+	}
+
+	fn get_overflow(&self) -> bool {
+		self.check_flag(ExStatus::V)
+	}
+
+	fn get_p_bits(&self) -> u8 {
+		self.regs.p.bits()
+	}
+
+	fn get_rel_addr(&self) -> usize {
+		self.cache.rel_addr
+	}
+
+	fn get_sp(&self) -> usize {
+		self.regs.s
+	}
+
+	fn get_x(&self) -> u8 {
+		self.regs.x
+	}
+
+	fn get_y(&self) -> u8 {
+		self.regs.y
+	}
+
+	fn interrupt(&mut self, new_abs_addr: usize, new_cycles: u8) {
+		// write the counter's current value to stack
+		self.stack_write_ptr(self.get_counter());
+
+		// write state register to stack too
+		self.set_flag(ExStatus::B, false);
+		self.set_flag(ExStatus::I, true);
+		self.stack_write(self.get_p_bits());
+
+		// get the new pc value
+		self.set_abs(new_abs_addr);
+		let addr = self.fetch_addr();
+		self.set_counter(addr);
+
+		self.set_cycles(new_cycles);
+	}
+
+	fn set_0_if(&mut self, value: u16) {
+		self.set_flag(ExStatus::Z, (value & 255) == 0)
+	}
+
+	fn set_a(&mut self, value: u8) {
+		self.regs.a = value;
+	}
+
+	fn set_abs_addr(&mut self, value: usize) {
+		self.cache.abs_addr = value;
+	}
+
+	fn set_brk(&mut self, condition: bool) {
+		self.set_flag(ExStatus::B, condition);
+	}
+
+	fn set_carry_if(&mut self, condition: bool) {
+		self.set_flag(ExStatus::C, condition);
+	}
+
+	fn set_counter(&mut self, value: usize) {
+		self.regs.pc = value;
+	}
+
+	fn set_cycles(&mut self, value: u8) {
+		self.cache.cycles = value;
+	}
+
+	fn set_data(&mut self, value: u8) {
+		self.cache.data = value;
+	}
+
+	fn set_int(&mut self, condition: bool) {
+		self.set_flag(ExStatus::I, condition);
+	}
+
+	fn set_neg_if(&mut self, value: u16) {
+		self.set_flag(ExStatus::N, value & 128 != 0)
+	}
+
+	fn set_rel_addr(&mut self, value: usize) {
+		self.cache.rel_addr = value;
+	}
+
+	fn set_sp(&mut self, value: usize) {
+		self.regs.s = value;
+	}
+
+	fn set_x(&mut self, value: u8) {
+		self.regs.x = value;
+	}
+
+	fn set_y(&mut self, value: u8) {
+		self.regs.y = value;
+	}
+
+	fn stack_read(&mut self) -> u8 {
+		self.regs.s += 1;
+		self.get_u8(self.get_sp())
+	}
+
+	fn stack_write(&mut self, data: u8) {
+		self.write( + (self.get_sp() % 256), &[data]);
+		self.regs.s -= 1;
+	}
+
+	fn stackdump(&self) -> String {
+		let dump = self.read(, 256);
+		hexdump(&dump[..], 2)
+	}
+}
+
+impl ISA6502 for CSG65CE02 {
+	fn abs(&mut self) -> u8 {
+		self.set_mode(ExMode::ABS);
+		let addr = self.read_rom_addr();
+		self.set_abs_addr(addr);
+
+		0
+	}
+
+	fn abx(&mut self) -> u8 {
+		self.set_mode(ExMode::ABX);
+
+		let addr = self.read_rom_addr();
+		self.set_abs_addr(addr + self.get_x_zp_addr());
+
+		self.check_page(addr)
+	}
+
+	fn aby(&mut self) -> u8 {
+		self.set_mode(ExMode::ABY);
+
+		let addr = self.read_rom_addr();
+		self.set_abs_addr(addr + self.get_y_zp_addr());
+
+		self.check_page(addr)
+	}
+
+	fn imm(&mut self) -> u8 {
+		self.set_mode(ExMode::IMM);
+		self.set_abs_addr(self.get_counter());
+		self.incr();
+		0
+	}
+
+	fn imp(&mut self) -> u8 {
+		self.set_mode(ExMode::IMP);
+		self.set_data(self.get_a());
+		0
+	}
+
+	fn ind(&mut self) -> u8 {
+		if self.get_z() == 0 {
+			self.set_mode(ExMode::IND);
+			let ptr = self.read_rom_addr();
+
+			if (ptr & 255) == 255 {
+				// page boundary hardware bug
+				self.set_abs_addr(self.get_ptr(ptr));
+			} else {
+				// normal behavior
+				self.set_abs_addr(self.get_ptr(ptr));
+			}
+		}
+
+		0
+	}
+
+	fn irq(&mut self) {
+		if !self.check_flag(ExStatus::I) {
+			self.interrupt(IRQ_ADDR, 7);
+		}
+	}
+
+	fn izx(&mut self) -> u8 {
+		self.set_mode(ExMode::IZX);
+
+		let t = self.read_rom_zp_addr();
+		let lo = self.get_zp_addr((t + self.get_x_zp_addr()) & 255);
+		let hi = self.get_zp_addr((t + self.get_x_zp_addr() + 1) & 255);
+
+		self.set_abs_addr((hi << 8) | lo);
+		0
+	}
+
+	fn izy(&mut self) -> u8 {
+		self.set_mode(ExMode::IZY);
+
+		let t = self.read_rom_zp_addr();
+		let lo = self.get_zp_addr(t & 255);
+		let hi = self.get_zp_addr((t + 1) & 255);
+
+		self.set_abs_addr(((hi << 8) | lo) + self.get_y_zp_addr());
+
+		if self.get_abs_hi() != (hi << 8) { 1 } else { 0 }
+	}
+
+	fn rel(&mut self) -> u8 {
+		self.set_mode(ExMode::REL);
+		self.cache.rel_addr = self.read_rom_zp_addr();
+
+		// check_flag for signed bit
+		if self.get_rel_addr() & 128 != 0 {
+			self.cache.rel_addr |= 0xFF00;
+		}
+
+		0
+	}
+
+	fn zpg(&mut self) -> u8 {
+		self.set_mode(ExMode::ZPG);
+		let addr = self.read_rom_zp_addr();
+		self.set_abs_addr(addr);
+		self.incr();
+		self.cache.abs_addr &= 255;
+		0
+	}
+
+	fn zpx(&mut self) -> u8 {
+		self.set_mode(ExMode::ZPX);
+		let addr = self.read_rom_zp_addr();
+		self.set_abs_addr(addr + self.get_x_zp_addr());
+		self.cache.abs_addr &= 255;
+		0
+	}
+
+	fn zpy(&mut self) -> u8 {
+		self.set_mode(ExMode::ZPY);
+		let addr = self.read_rom_zp_addr();
+		self.set_abs_addr(addr + self.get_y_zp_addr());
+		self.cache.abs_addr &= 255;
+		0
+	}
+
+	fn cld(&mut self) -> u8 {
+		self.set_flag(ExStatus::D, false);
+		0
+	}
+
+	fn nop(&self) -> u8 {
+		0
+	}
+
+	fn php(&mut self) -> u8 {
 		self.set_flag(ExStatus::B, true);
-		self.base.stack_write(self.get_p_bits());
+		self.stack_write(self.get_p_bits());
 		self.set_flag(ExStatus::B, false);
 
 		0
 	}
 
-	/// Push Z register to the stack
-	pub fn phz(&mut self) -> u8 {
-		self.base.stack_write(self.get_z());
+	fn plp(&mut self) -> u8 {
+		self.regs.p = ExStatus::from_bits_truncate(self.stack_read());
 		0
 	}
 
-	/// Pop accumulator register from the stack
-	pub fn pla(&mut self) -> u8 {
-		let b = self.base.stack_read();
-		self.base.set_a(b);
-		self.set_flags_nz(self.base.get_a16());
-
-		0
-	}
-
-	/// Pop state register from the stack
-	pub fn plp(&mut self) -> u8 {
-		self.regs.p = ExStatus::from_bits_truncate(self.base.stack_read());
-		0
-	}
-
-	/// Pop Z register from the stack
-	pub fn plz(&mut self) -> u8 {
-		let b = self.base.stack_read();
-		self.set_z(b);
-		self.set_flags_nz(self.get_z16());
-
-		0
-	}
-
-	/// Bit rotate left
-	pub fn rol(&mut self) -> u8 {
-		let tmp = self.base.fetch16().rotate_left(1);
-		self.set_flags_cnz(tmp);
-		self.check_mode(tmp);
-
-		0
-	}
-
-	/// Bit rotate right
-	pub fn ror(&mut self) -> u8 {
-		let tmp = self.base.fetch16().rotate_right(1);
-		self.set_flag(ExStatus::C, (self.base.get_data() & 1) != 0);
-		self.set_flags_nz(tmp);
-		self.check_mode(tmp);
-
-		0
-	}
-
-	/// Bit rotate left (word)
-	pub fn row(&mut self) -> u8 {
-		let tmp = self.fetchw().rotate_left(1);
-		self.set_flags_cnz(tmp);
-		self.check_mode(tmp);
-
-		0
-	}
-
-	/// Restores state from interrupt
-	pub fn rti(&mut self) -> u8 {
+	fn rti(&mut self) -> u8 {
 		// restore state flags
 		self.regs.p = ExStatus::from_bits_truncate(self.stack_read());
 		self.regs.p.toggle(ExStatus::B);
 
 		// and counter
 		let addr = self.stack_read_addr();
-		self.base.set_counter(addr);
+		self.set_counter(addr);
 
 		0
 	}
 
-	/// Subtraction with carry
-	pub fn sbc(&mut self) -> u8 {
-		let value = self.base.fetch16() ^ 255; // invert the value
-		let tmp = self.base.get_a16() + value + self.get_carry();
-
-		self.set_flags_cnz(tmp);
-		self.set_flag(ExStatus::V, (tmp ^ self.base.get_a16() & (tmp ^ value)) & 128 != 0);
-		self.base.set_a((tmp & 255) as u8);
-
-		1
+	fn rts(&mut self) -> u8 {
+		// not currently known what immediate mode does, so it's a no-op
+		if self.get_mode() == ExMode::IMM {
+			0
+		} else {
+			let addr = self.stack_get_ptr();
+			self.set_counter(addr);
+			0
+		}
 	}
 
-	/// Set carry bit
-	pub fn sec(&mut self) -> u8 {
-		self.set_flag(ExStatus::C, true);
-		0
-	}
-
-	/// Set decimal bit
-	pub fn sed(&mut self) -> u8 {
+	fn sed(&mut self) -> u8 {
 		self.set_flag(ExStatus::D, true);
-		0
-	}
-
-	/// Set stack extend bit
-	pub fn see(&mut self) -> u8 {
-		self.set_flag(ExStatus::D, true);
-		0
-	}
-
-	/// Set interrupt disable bit
-	pub fn sei(&mut self) -> u8 {
-		self.set_flag(ExStatus::I, true);
-		0
-	}
-
-	/// Store Z at address
-	pub fn stz(&mut self) -> u8 {
-		self.write_last(self.get_z());
-		0
-	}
-
-	/// Transfer accumulator to base page
-	pub fn tab(&mut self) -> u8 {
-		self.set_b(self.base.get_a());
-		self.set_flags_nz(self.get_b16());
-		0
-	}
-
-	/// Transfer accumulator to X
-	pub fn tax(&mut self) -> u8 {
-		self.base.set_x(self.base.get_a());
-		self.set_flags_nz(self.base.get_x16());
-		0
-	}
-
-	/// Transfer accumulator to Y
-	pub fn tay(&mut self) -> u8 {
-		self.base.set_y(self.base.get_a());
-		self.set_flags_nz(self.base.get_y16());
-		0
-	}
-
-	/// Transfer accumulator to Z
-	pub fn taz(&mut self) -> u8 {
-		self.set_z(self.get_a());
-		self.set_flags_nz(self.get_z16());
-		0
-	}
-
-	/// Transfer stack pointer to base page
-	pub fn tsb(&mut self) -> u8 {
-		self.set_b(self.base.get_sp() as u8);
-		self.set_flags_nz(self.get_b16());
-		0
-	}
-
-	/// Transfer stack pointer to X
-	pub fn tsx(&mut self) -> u8 {
-		self.base.set_x(self.base.get_sp() as u8);
-		self.set_flags_nz(self.base.get_x16());
-		0
-	}
-
-	/// Transfer X to accumulator
-	pub fn txa(&mut self) -> u8 {
-		self.base.set_a(self.base.get_x());
-		self.set_flags_nz(self.base.get_a16());
-		0
-	}
-
-	/// Transfer Y to accumulator
-	pub fn tya(&mut self) -> u8 {
-		self.base.set_a(self.base.get_y());
-		self.set_flags_nz(self.base.get_a16());
-		0
-	}
-
-	/// Transfer Z to accumulator
-	pub fn tza(&mut self) -> u8 {
-		self.base.set_a(self.base.get_z());
-		self.set_flags_nz(self.base.get_a16());
 		0
 	}
 }
 
-impl DeviceMap for CSG65CE02 {
+/*impl DeviceMap for CSG65CE02 {
 	fn add_region(&mut self, address: usize, region: Region) {
-		self.base.add_region(address, region);
+		self.add_region(address, region);
 	}
 
 	fn generate_regions(&mut self, start: usize, end: usize) {
@@ -1207,29 +1068,21 @@ impl DeviceMap for CSG65CE02 {
 			}
 		}
 	}
-}
+}*/
 
 impl DeviceBase for CSG65CE02 {
 	fn read(&self, address: usize, length: usize) -> Vec<u8> {
-		self.base.read(address, length)
+		self.bus.borrow().read(address, length)
 	}
 
 	fn write(&mut self, address: usize, data: &[u8]) {
-		self.base.write(address, data);
+		self.bus.borrow_mut().write(address, data);
 	}
 }
 
 impl Device for CSG65CE02 {
-	fn get_bus(&self) -> Rc<Bus> {
-		self.base.get_bus()
-	}
-
-	fn get_region(&self, offset: usize) -> Option<&Region> {
-		self.base.get_region(offset)
-	}
-
-	fn get_region_mut(&mut self, offset: usize) -> Option<&mut Region> {
-		self.base.get_region_mut(offset)
+	fn get_bus(&self) -> Rc<RefCell<Bus>> {
+		Rc::clone(&self.bus)
 	}
 }
 
@@ -2530,5 +2383,25 @@ impl Processor for CSG65CE02 {
 
 	fn get_ptr_size(&self) -> usize {
 		2
+	}
+
+	fn reset(&mut self) {
+		self.set_a(0);
+		self.set_b(0);
+		self.set_flag(ExStatus::default(), true);
+		self.set_x(0);
+		self.set_y(0);
+		self.set_z(0);
+		self.set_sp(0);
+
+		self.set_abs(RES_ADDR);
+		let addr = self.fetch_addr();
+		self.set_counter(addr);
+
+		self.cache.rel_addr = 0;
+		self.set_abs(0);
+		self.set_data(0);
+
+		self.cache.cycles = 8;
 	}
 }

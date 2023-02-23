@@ -46,4 +46,3 @@ pub const fn scale5to8(b: u8) -> u8 {
 pub const fn scale8to5(b: u8) -> u8 {
 	(b & 0xF8) >> 3
 }
-

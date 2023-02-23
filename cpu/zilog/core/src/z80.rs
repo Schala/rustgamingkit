@@ -1,7 +1,7 @@
 use bitflags::bitflags;
 
 use std::{
-	default::Default,
+	cell::RefCell,
 	fmt::{
 		Display,
 		Formatter,
@@ -14,11 +14,8 @@ use rgk_processors_core::{
 	Bus,
 	Device,
 	DeviceBase,
-	DeviceMap,
-	Processor,
-	Region,
-	RegionMap,
-	RegionType
+	hexdump,
+	Processor
 };
 
 bitflags! {
@@ -85,6 +82,34 @@ impl Display for Status {
 	}
 }
 
+/// Register specified with an opcode
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub enum RegisterType {
+	A, AF, B, BC, C, D, DE, E, H, HL, L, SP,
+}
+
+/// Address modes
+#[repr(u8)]
+#[derive(Clone, Copy)]
+pub enum Mode {
+	A8ToReg,
+	A16ToReg,
+	D8,
+	D8ToReg,
+	D8ToRegAddr,
+	D16,
+	D16ToReg,
+	Implied,
+	Reg,
+	RegAddr,
+	RegAddrToReg,
+	RegToA8,
+	RegToA16,
+	RegToReg,
+	RegToRegAddr,
+}
+
 /// Z80 registers
 #[derive(Clone, Copy, Debug)]
 pub struct Registers {
@@ -100,7 +125,7 @@ pub struct Registers {
 	r: u8,
 	x: u16,
 	y: u16,
-	s: usize,
+	sp: usize,
 	pc: usize,
 }
 
@@ -116,9 +141,27 @@ impl Display for Registers {
 	}
 }
 
+/// Z80 cache
+#[derive(Clone, Copy, Debug)]
+pub struct Cache {
+	data: u8,
+	opcode: u8,
+	addr: usize,
+}
+
+impl Display for Cache {
+	fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+		writeln!(f, "Last fetched byte: ${:X}", self.data)?;
+		writeln!(f, "Last fetched opcode: ${:X}", self.opcode)?;
+		writeln!(f, "Cycles remaining: {}", self.cycles)?;
+		writeln!(f, "Current address: ${:X}", self.addr)?;
+	}
+}
+
 pub struct Z80 {
-	bus: Rc<Bus>,
+	bus: Rc<RefCell<Bus>>,
 	regs: Registers,
+	cache: Cache,
 }
 
 impl Z80 {
@@ -146,215 +189,207 @@ impl Z80 {
 	}
 
 	/// Gets the 8-bit accumulator register
-	pub const fn get_a(&self) -> u8 {
+	const fn get_a(&self) -> u8 {
 		self.regs.a
 	}
 
 	/// Gets the AF register bits
-	pub const fn get_af(&self) -> u16 {
+	const fn get_af(&self) -> u16 {
 		u16::from_le_bytes([self.get_f_bits(), self.get_a()])
 	}
 
 	/// Gets the B register
-	pub const fn get_b(&self) -> u8 {
+	const fn get_b(&self) -> u8 {
 		self.regs.b
 	}
 
 	/// Gets the BC register
-	pub const fn get_bc(&self) -> u16 {
+	const fn get_bc(&self) -> u16 {
 		u16::from_le_bytes([self.get_c(), self.get_b()])
 	}
 
 	/// Gets the C register
-	pub const fn get_c(&self) -> u8 {
+	const fn get_c(&self) -> u8 {
 		self.regs.c
 	}
 
 	/// Gets the program counter
-	pub const fn get_counter(&self) -> usize {
+	const fn get_counter(&self) -> usize {
 		self.regs.pc
 	}
 
 	/// Gets the D register
-	pub const fn get_d(&self) -> u8 {
+	const fn get_d(&self) -> u8 {
 		self.regs.d
 	}
 
 	/// Gets the DE register
-	pub const fn get_de(&self) -> u16 {
+	const fn get_de(&self) -> u16 {
 		u16::from_le_bytes([self.get_e(), self.get_d()])
 	}
 
 	/// Gets the E register
-	pub const fn get_e(&self) -> u8 {
+	const fn get_e(&self) -> u8 {
 		self.regs.e
 	}
 
 	/// Gets the flags register bits
-	pub const fn get_f_bits(&self) -> u8 {
+	const fn get_f_bits(&self) -> u8 {
 		self.regs.f.bits()
 	}
 
 	/// Gets the H register
-	pub const fn get_h(&self) -> u8 {
+	const fn get_h(&self) -> u8 {
 		self.regs.h
 	}
 
 	/// Gets the interrupt vector
-	pub const fn get_interrupt(&self) -> u8 {
+	const fn get_interrupt(&self) -> u8 {
 		self.regs.i
 	}
 
 	/// Gets the 16-bit accumulator register
-	pub const fn get_hl(&self) -> u16 {
+	const fn get_hl(&self) -> u16 {
 		u16::from_le_bytes([self.get_l(), self.get_h()])
 	}
 
 	/// Gets the L register
-	pub const fn get_l(&self) -> u8 {
+	const fn get_l(&self) -> u8 {
 		self.regs.l
 	}
 
 	/// Gets the refresh counter
-	pub const fn get_refresh_counter(&self) -> u8 {
+	const fn get_refresh_counter(&self) -> u8 {
 		self.regs.r
 	}
 
 	/// Gets the stack pointer
-	pub const fn get_sp(&self) -> usize {
+	const fn get_sp(&self) -> usize {
 		self.regs.s
 	}
 
 	/// Gets the X index register
-	pub const fn get_x(&self) -> u16 {
+	const fn get_x(&self) -> u16 {
 		self.regs.x
 	}
 
 	/// Gets the Y index register
-	pub const fn get_y(&self) -> u16 {
+	const fn get_y(&self) -> u16 {
 		self.regs.y
 	}
 
 	/// Increments the program counter
-	pub fn incr(&mut self) {
+	fn incr(&mut self) {
 		self.regs.pc += 1;
 	}
 
 	/// Sets the 8-bit accumulator register
-	pub fn set_a(&mut self, value: u8)  {
+	fn set_a(&mut self, value: u8)  {
 		self.regs.a = value;
 	}
 
 	/// Sets the AF register bits
-	pub fn set_af(&mut self, value: u16) {
+	fn set_af(&mut self, value: u16) {
 		let bytes = value.to_le_bytes();
 		self.set_a(bytes[1]);
 		self.regs.f = Status::from_bits_truncate(bytes[0] as u32);
 	}
 
 	/// Sets the B register
-	pub fn set_b(&mut self, value: u8)  {
+	fn set_b(&mut self, value: u8)  {
 		self.regs.b = value;
 	}
 
 	/// Sets the BC register
-	pub fn set_bc(&mut self, value: u16) {
+	fn set_bc(&mut self, value: u16) {
 		let bytes = value.to_le_bytes();
 		self.set_b(bytes[1]);
 		self.set_c(bytes[0]);
 	}
 
 	/// Sets the C register
-	pub fn set_c(&mut self, value: u8)  {
+	fn set_c(&mut self, value: u8)  {
 		self.regs.c = value;
 	}
 
 	/// Sets the program counter
-	pub fn set_counter(&mut self, value: usize) {
+	fn set_counter(&mut self, value: usize) {
 		self.regs.pc = value;
 	}
 
 	/// Sets the D register
-	pub fn set_d(&mut self, value: u8)  {
+	fn set_d(&mut self, value: u8)  {
 		self.regs.d = value;
 	}
 
 	/// Sets the DE register
-	pub fn set_de(&mut self, value: u16) {
+	fn set_de(&mut self, value: u16) {
 		let bytes = value.to_le_bytes();
 		self.set_d(bytes[1]);
 		self.set_e(bytes[0]);
 	}
 
 	/// Sets the E register
-	pub fn set_e(&mut self, value: u8)  {
+	fn set_e(&mut self, value: u8)  {
 		self.regs.e = value;
 	}
 
 	/// Sets the H register
-	pub fn set_h(&mut self, value: u8)  {
+	fn set_h(&mut self, value: u8)  {
 		self.regs.h = value;
 	}
 
 	/// Sets the 16-bit accumulator register
-	pub fn set_hl(&mut self, value: u16) {
+	fn set_hl(&mut self, value: u16) {
 		let bytes = value.to_le_bytes();
 		self.set_h(bytes[1]);
 		self.set_l(bytes[0]);
 	}
 
 	/// Sets the interrupt vector
-	pub fn set_interrupt(&mut self, value: u8)  {
+	fn set_interrupt(&mut self, value: u8)  {
 		self.regs.i = value;
 	}
 
 	/// Sets the L register
-	pub fn set_l(&mut self, value: u8)  {
+	fn set_l(&mut self, value: u8)  {
 		self.regs.l = value;
 	}
 
 	/// Sets the refresh counter
-	pub fn set_refresh_counter(&mut self, value: u8)  {
+	fn set_refresh_counter(&mut self, value: u8)  {
 		self.regs.r = value;
 	}
 
 	/// Sets the stack pointer
-	pub fn set_sp(&mut self, value: usize) {
+	fn set_sp(&mut self, value: usize) {
 		self.regs.s = value;
 	}
 
 	/// Sets the X index register
-	pub fn set_x(&mut self, value: u16) {
+	fn set_x(&mut self, value: u16) {
 		self.regs.x = value;
 	}
 
 	/// Sets the Y index register
-	pub fn set_y(&mut self, value: u16) {
+	fn set_y(&mut self, value: u16) {
 		self.regs.y = value;
 	}
 }
 
 impl DeviceBase for Z80 {
 	fn read(&self, address: usize, length: usize) -> Vec<u8> {
-		self.bus.read(address, length)
+		self.bus.borrow().read(address, length)
 	}
 
 	fn write(&mut self, address: usize, data: &[u8]) {
-		self.bus.write(address, data);
+		self.bus.borrow().write(address, data);
 	}
 }
 
 impl Device for Z80 {
 	fn get_bus(&self) -> Rc<Bus> {
 		Rc::clone(&self.bus)
-	}
-
-	fn get_region(&self, offset: usize) -> Option<&Region> {
-		self.bus.get_region(offset)
-	}
-
-	fn get_region_mut(&mut self, offset: usize) -> Option<&mut Region> {
-		self.bus.get_region_mut(offset)
 	}
 }
 
@@ -364,5 +399,8 @@ impl Processor for Z80 {
 
 	fn get_ptr_size(&self) -> usize {
 		2
+	}
+
+	fn reset(&mut self) {
 	}
 }
