@@ -3,6 +3,7 @@ use indexmap::IndexMap;
 
 use std::{
 	cell::RefCell,
+	collections::HashSet,
 	fmt::{
 		Display,
 		Formatter,
@@ -31,6 +32,9 @@ pub enum RegionType {
 	/// Simple label
 	#[default]
 	Label,
+
+	/// Untyped data
+	Data,
 
 	/// Function
 	Function,
@@ -90,7 +94,7 @@ pub struct Region {
 	flags: RegionFlags,
 	kind: RegionType,
 	label: String,
-	refs: Vec<usize>,
+	refs: HashSet<usize>,
 	size: usize,
 }
 
@@ -104,13 +108,15 @@ impl Region {
 			size,
 			kind,
 			label: label.to_owned(),
-			refs: vec![],
+			refs: HashSet::new(),
 		}
 	}
 
 	/// Adds an address that references the region
 	pub fn add_ref(&mut self, addr: usize) {
-		self.refs.push(addr);
+		if !self.refs.contains(&addr) {
+			self.refs.insert(addr);
+		}
 	}
 
 	/// Gets the size of the region if the type is an array, otherwise the singular size is given
@@ -128,8 +134,8 @@ impl Region {
 	}
 
 	/// Gets the region's referencing addresses
-	pub fn get_refs(&self) -> &[usize] {
-		self.refs.as_ref()
+	pub fn get_refs(&self) -> Vec<usize> {
+		self.refs.iter().map(|o| *o).collect()
 	}
 
 	/// Gets the size of the region. This currently does not take alignment

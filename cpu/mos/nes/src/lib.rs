@@ -37,14 +37,14 @@ struct Cache {
 
 /// NES pixel processing unit
 #[derive(Clone, Debug)]
-struct PPU {
+struct PPU2C02 {
 	bus: Box<Bus>,
 	cpu_bus: Box<Bus>,
 	cpu: Box<CPU>,
 	cache: Cache,
 }
 
-impl PPU {
+impl PPU2C02 {
 	/// Initialises a new PPU, given pointers to a primary bus and CPU
 	fn new(cpu_bus: Box<Bus>, cpu: Box<CPU>) -> PPU {
 		PPU {

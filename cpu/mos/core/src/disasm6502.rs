@@ -647,7 +647,9 @@ impl Disassembler for MOS6502Disassembler {
 
 		loop {
 			if end_reached {
-				// return from a jump
+				end_reached = false;
+
+				// return from a function
 				if let Some(i) = counters.pop() {
 					offset = i;
 				} else {
@@ -663,11 +665,11 @@ impl Disassembler for MOS6502Disassembler {
 			}
 
 			let op = dev.get_u8(offset) as usize;
+			dbg!(offset, &OPCODES[op]);
 			offset += 1;
-			dbg!(&OPCODES[op]);
 
 			match op {
-				// relative, continue to next byte but cache the jump and counter
+				// relative, continue to next byte but cache the jump
 				16 | 48 | 80 | 112 | 144 | 176 | 208 | 240 => {
 					let addr = ((offset as i32) + (dev.get_i8(offset) as i32) + 1) as u16;
 
@@ -684,16 +686,14 @@ impl Disassembler for MOS6502Disassembler {
 					}
 
 					jumps.push(addr as usize);
-					counters.push(offset);
 					offset += 1;
 				},
 
-				32 => { // JSR, label is a function
+				32 => { // JSR, label is a function, cache the counter at the next instruction
 					let addr = dev.get_u16_le(offset) as usize;
 
 					if self.region_exists(addr) {
-						let addrsz = addr as usize;
-						if let Some(mut r) = self.rgns.get_mut(&addrsz) {
+						if let Some(mut r) = self.rgns.get_mut(&addr) {
 							r.label_to_fn(Some(format!("FUN_{:04X}", addr & 65535).as_str()));
 							r.add_ref(offset - 1);
 						}
@@ -704,13 +704,16 @@ impl Disassembler for MOS6502Disassembler {
 						self.add_region(addr, r);
 					}
 
-					jumps.push(addr as usize);
-					counters.push(offset);
-					end_reached = true;
+					counters.push(offset + 2);
+					offset = addr;
+					dbg!(offset, &counters);
 				},
 
 				// returns
-				64 | 96 => end_reached = true,
+				64 | 96 => {
+					end_reached = true;
+					dbg!(&counters);
+				}
 
 				76 | 108 => { // JMP absolute or indirect
 					let addr = dev.get_u16_le(offset);
@@ -727,27 +730,56 @@ impl Disassembler for MOS6502Disassembler {
 						self.add_region(addr as usize, r);
 					}
 
-					jumps.push(addr as usize);
-					counters.push(offset);
-					end_reached = true;
+					offset = addr as usize;
+				},
+
+				// zero page
+				4..=7 | 36..=39 | 68..=71 | 100..=103 | 132..=135 | 164..=167 | 196..=199 | 228..=231 => {
+					let addr = dev.get_u8(offset) as usize;
+
+					if self.region_exists(addr) {
+						if let Some(mut r) = self.rgns.get_mut(&addr) {
+							r.add_ref(offset - 1);
+						}
+					} else {
+						let mut r = Region::new(0, RegionType::Data, RegionFlags::default(),
+							format!("DAT_{:04X}", addr).as_str());
+						r.add_ref(offset - 1);
+						self.add_region(addr as usize, r);
+					}
+
+					offset += 1;
 				},
 
 				// absolute
 				12..=14 | 25 | 27..=30 | 44..=47 | 57 | 59..=63 | 77..=79 | 89 | 91..=95 | 109..=111 | 121 | 123..=127 |
 				140..=143 | 153 | 155..=159 | 172..=175 | 185 | 187..=191 | 204..=207 | 217 | 219..=223 | 236..=239 |
 				249 | 251..=255 => {
+					let addr = dev.get_u16_le(offset) as usize;
+
+					if self.region_exists(addr) {
+						if let Some(mut r) = self.rgns.get_mut(&addr) {
+							r.add_ref(offset - 1);
+						}
+					} else {
+						let mut r = Region::new(0, RegionType::Data, RegionFlags::default(),
+							format!("DAT_{:04X}", addr).as_str());
+						r.add_ref(offset - 1);
+						self.add_region(addr as usize, r);
+					}
+
 					offset += 2;
 				},
 
-				// indirect, zero page, immediate
-				1 | 5..=7 | 9 | 17 | 19..=23 | 33 | 35..=39 | 41 | 43 | 49 | 51..=55 | 65 | 67..=71 | 73 | 75 |
-				81 | 83..=87 | 97 | 99..=103 | 105 | 107 | 113 | 115..=119 | 128..=135 | 137 | 139 | 145 | 147..=151 |
-				160..=167 | 169 | 171 | 177 | 179..=183 | 192..=199 | 201 | 203 | 209 | 211..=215 | 224..=231 | 233 |
-				235 | 241 | 243..=247 => {
+
+				// rest
+				1 | 9 | 17 | 19..=23 | 33 | 35 | 41 | 43 | 49 | 51..=55 | 65 | 67 | 73 | 75 | 81 | 83..=87 | 97 | 99 |
+				105 | 107 | 113 | 115..=119 | 128..=131 | 137 | 139 | 145 | 147..=151 | 160..=163 | 169 | 171 | 177 |
+				179..=183 | 192..=199 | 201 | 203 | 209 | 211..=215 | 224..=231 | 233 | 235 | 241 | 243..=247 => {
 					offset += 1;
 				},
 
-				// misc. implied
+				// implied
 				_ => (),
 			}
 		}

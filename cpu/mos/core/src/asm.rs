@@ -655,7 +655,7 @@ mod lex {
 
 	/*/// Parses a byte array
 	fn db(input: &str) -> IResult<&str, Vec<u8>, LexerError> {
-		preceded(ws(preceded(opt(char('.')), alt((tag_no_case("db"), tag_no_case("byte")))),
+		preceded(ws(preceded(opt(char('.')), alt((tag_no_case("db"), tag_no_case("byt"), tag_no_case("byte")))),
 			separated_list1(map(int, |i| i as u8), ws(char(','))))(input)
 	}
 
@@ -829,6 +829,13 @@ mod lex {
 		let (input, v) = int(input)?;
 		Ok((input, (Mode::REL, v)))
 	}
+
+	/*
+	/// Parses a string
+	fn tx(input: &str) -> IResult<&str, Vec<u8>, LexerError> {
+		preceded(ws(preceded(opt(char('.')), alt((tag_no_case("tx"), tag_no_case("text")))),
+			double_quoted(map(int, |i| i as u8))))(input)
+	}*/
 
 	/// Parses a zero page operation
 	fn zp(input: &str) -> IResult<&str, (Mode, u16), LexerError> {
